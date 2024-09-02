@@ -1,0 +1,19 @@
+# @package _global_
+defaults:
+  - override /dataset: file
+  - override /diffusion: edm
+  - _self_
+
+name: hypergraphTree
+
+dataset:
+  name: hypergraphTree
+
+training:
+  batch_size: 32
+
+validation:
+  batch_size: 20
+
+spectral:
+  num_features: 2
