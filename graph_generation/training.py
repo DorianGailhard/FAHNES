@@ -12,6 +12,7 @@ from matplotlib.figure import Figure
 from omegaconf import OmegaConf
 from torch.optim import Adam
 from scipy.spatial import ConvexHull
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 import wandb
 
@@ -92,7 +93,7 @@ class Trainer:
         # Wandb
         if cfg.wandb.logging:
             self.wandb_run = wandb.init(
-                project="graph-generation",
+                project="hypergraph-generation-features",
                 config=OmegaConf.to_container(cfg, resolve=True),
                 name=cfg.name,
                 resume=self.run_id,
@@ -308,54 +309,90 @@ class Trainer:
         n = min(4, len(self.validation_hypergraphs)) // 2
         fig, axs = plt.subplots(n, 2, figsize=(50, 50))
         
-        node_size=200
-        edge_width=2
-        node_color='skyblue'
-        edge_color='salmon'
-        alpha=0.7
-        
-        for i in range(n * n):
-            ax = axs[i // n, i % n]
-            H = pred_hypergraphs[i]
+        if self.cfg.training.visualization == 'hypergraph':
+            node_size=200
+            edge_width=2
+            node_color='skyblue'
+            edge_color='salmon'
+            alpha=0.7
             
-            #Get the clique expansion of the hypergraph (hnx doesn't have a spring layout...)
-            G = nx.Graph()
-            for edge in H.edges:
-                nodes = list(H.edges[edge])
-                for i in range(len(nodes)):
-                    for j in range(i+1, len(nodes)):
-                        G.add_edge(nodes[i], nodes[j])
-
-            # Compute layout
-            pos = nx.spring_layout(G, k=1, scale=1, iterations=100)
+            for i in range(n * n):
+                ax = axs[i // n, i % n]
+                H = pred_hypergraphs[i]
+                
+                #Get the clique expansion of the hypergraph (hnx doesn't have a spring layout...)
+                G = nx.Graph()
+                for edge in H.edges:
+                    nodes = list(H.edges[edge])
+                    for i in range(len(nodes)):
+                        for j in range(i+1, len(nodes)):
+                            G.add_edge(nodes[i], nodes[j])
+    
+                # Compute layout
+                pos = nx.spring_layout(G, k=1, scale=1, iterations=100)
+                
+                # Draw hyperedges using convex hulls
+                for i, edge in enumerate(H.edges):
+                    nodes = list(H.edges[edge])
+                    if len(nodes) > 2:
+                        points = np.array([pos[node] for node in nodes])
+                        hull = ConvexHull(points)
+                        hull_points = points[hull.vertices]
+                        
+                        # Generate a random pastel color for the hull background
+                        hull_color = np.random.random(3) * 0.5 + 0.5
+                        
+                        ax.fill(hull_points[:, 0], hull_points[:, 1], color=hull_color, alpha=0.3)
+                        for simplex in hull.simplices:
+                            ax.plot(points[simplex, 0], points[simplex, 1], color=edge_color, 
+                                     linewidth=edge_width, alpha=alpha)
+                    elif len(nodes) == 2:
+                        # For edges with only two nodes, draw a straight line
+                        node1, node2 = nodes
+                        ax.plot([pos[node1][0], pos[node2][0]], [pos[node1][1], pos[node2][1]],
+                                 color=edge_color, linewidth=edge_width, alpha=alpha)
+                
+                # Draw nodes
+                nx.draw_networkx_nodes(G, pos, ax=ax, node_size=node_size, node_color=node_color, alpha=1, linewidths=1, edgecolors='black')
+                
+                ax.axis('off')
+                ax.title.set_text(f"N = {len(H.nodes)}")
+                ax.title.set_fontsize(40)
+        elif self.cfg.training.visualization == 'mesh':
+            for i in range(n * n):
+                ax = axs[i // n, i % n]
+                H = pred_hypergraphs[i]
+                
+                # Extract node positions from the 'feature' attribute
+                positions = np.array([H.nodes[node].feature for node in H.nodes])
             
-            # Draw hyperedges using convex hulls
-            for i, edge in enumerate(H.edges):
-                nodes = list(H.edges[edge])
-                if len(nodes) > 2:
-                    points = np.array([pos[node] for node in nodes])
-                    hull = ConvexHull(points)
-                    hull_points = points[hull.vertices]
-                    
-                    # Generate a random pastel color for the hull background
-                    hull_color = np.random.random(3) * 0.5 + 0.5
-                    
-                    ax.fill(hull_points[:, 0], hull_points[:, 1], color=hull_color, alpha=0.3)
-                    for simplex in hull.simplices:
-                        ax.plot(points[simplex, 0], points[simplex, 1], color=edge_color, 
-                                 linewidth=edge_width, alpha=alpha)
-                elif len(nodes) == 2:
-                    # For edges with only two nodes, draw a straight line
-                    node1, node2 = nodes
-                    ax.plot([pos[node1][0], pos[node2][0]], [pos[node1][1], pos[node2][1]],
-                             color=edge_color, linewidth=edge_width, alpha=alpha)
+                # Create a 3D plot
+                fig = plt.figure(figsize=(10, 10))
+                ax = fig.add_subplot(111, projection='3d')
             
-            # Draw nodes
-            nx.draw_networkx_nodes(G, pos, ax=ax, node_size=node_size, node_color=node_color, alpha=1, linewidths=1, edgecolors='black')
+                # Plot nodes
+                ax.scatter(positions[:, 0], positions[:, 1], positions[:, 2], c='b', s=20)
             
-            ax.axis('off')
-            ax.title.set_text(f"N = {len(H.nodes)}")
-            ax.title.set_fontsize(40)
+                # Plot filled edges (faces)
+                face_collection = []
+                for edge in H.edges:
+                    edge_nodes = list(H.edges[edge])
+                    if len(edge_nodes) > 2:  # Only plot edges with 3 or more nodes
+                        face = positions[edge_nodes]
+                        face_collection.append(face)
+            
+                poly = Poly3DCollection(face_collection, alpha=0.25, facecolor='r', edgecolor='k')
+                ax.add_collection3d(poly)
+            
+                # Set labels and title
+                ax.set_xlabel('X')
+                ax.set_ylabel('Y')
+                ax.set_zlabel('Z')
+            
+                # Set axis limits
+                ax.set_xlim(positions[:, 0].min(), positions[:, 0].max())
+                ax.set_ylim(positions[:, 1].min(), positions[:, 1].max())
+                ax.set_zlim(positions[:, 2].min(), positions[:, 2].max())
                 
         fig.tight_layout()
         results["examples"] = fig

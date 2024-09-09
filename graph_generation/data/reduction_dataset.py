@@ -36,10 +36,14 @@ class RandRedDataset(IterableDataset, ABC):
                     reduction_level=red.level,
                     adj=red.bipartite_adj.astype(bool).astype(np.float32),
                     node_type=node_type,
+                    node_features=red.node_features,
+                    hyperedge_features=red.hyperedge_features,
                     node_expansion=red.node_expansion,
                     edge_expansion=red.edge_expansion,
                     adj_reduced=reduced_hypergraph.bipartite_adj.astype(bool).astype(np.float32),
                     node_type_reduced=node_type_reduced,
+                    node_features_reduced=reduced_hypergraph.node_features,
+                    hyperedge_features_reduced=reduced_hypergraph.hyperedge_features,
                     expansion_matrix=reduced_hypergraph.expansion_matrix,
                     spectral_features_reduced=self.spectrum_extractor(reduced_hypergraph.bipartite_adj)
                     if self.spectrum_extractor is not None

@@ -189,64 +189,23 @@ class CentralityHarmonic(Metric):
         return wasserstein_distance(centrality_pred, centrality_reference)
 
 
-class ValidEgo(Metric):
-    def is_ego_hypergraph(self, H):
-        if len(H.nodes) == 0 or len(H.edges) == 0:
-            return False
-    
-        # Find the node that appears in the most hyperedges
-        node_frequencies = {node: 0 for node in H.nodes}
-        for edge in H.edges:
-            for node in H.edges[edge]:
-                node_frequencies[node] += 1
-        
-        potential_ego = max(node_frequencies, key=node_frequencies.get)
-        
-        # Check if the potential ego is in all or most hyperedges
-        edges_with_ego = sum(1 for edge in H.edges if potential_ego in H.edges[edge])
-        if edges_with_ego < len(H.edges):
-            return False
-    
-        # Check if all other nodes are directly connected to the ego
-        nodes_connected_to_ego = set()
-        for edge in H.edges:
-            if potential_ego in H.edges[edge]:
-                nodes_connected_to_ego.update(H.edges[edge])
-        
-        if nodes_connected_to_ego != set(H.nodes):
-            return False
-    
-        # Check if there are any hyperedges not including the ego or its direct connections
-        for edge in H.edges:
-            if potential_ego not in H.edges[edge] and not any(node in nodes_connected_to_ego for node in H.edges[edge]):
-                return False
-    
-        return True
-    
+class NodeFeaturesWasserstein(Metric):
     def __str__(self):
-        return "ValidEgo"
-    
-    def __call__(self, reference_hypergraphs, predicted_hypergraphs, train_hypergraphs):
-        valid = 0
-        
-        for H in predicted_hypergraphs:
-            if self.is_ego_hypergraph(H):
-                valid += 1
-        
-        return valid/len(predicted_hypergraphs)
-    
-
-class ValidHypertree(Metric):
-    def __str__(self):
-        return "ValidHypertree"
+        return "NodeFeaturesWasserstein"
 
     def __call__(self, reference_hypergraphs, predicted_hypergraphs, train_hypergraphs):
-        return eval_acc_tree_hypergraph(predicted_hypergraphs)
+        predicted_features = [H.nodes[n].feature for H in predicted_hypergraphs for n in H.nodes]
+        reference_features = [H.nodes[n].feature for H in reference_hypergraphs for n in H.nodes]
+        
+        return wasserstein_distance(predicted_features, reference_features)
     
-
-class ValidSBM(Metric):
+    
+class HyperedgeFeaturesWasserstein(Metric):
     def __str__(self):
-        return "ValidSBM"
+        return "HyperedgeFeaturesWasserstein"
 
     def __call__(self, reference_hypergraphs, predicted_hypergraphs, train_hypergraphs):
-        return eval_acc_sbm_hypergraph(predicted_hypergraphs)
+        predicted_features = [H.edges[e].feature for H in predicted_hypergraphs for e in H.edges]
+        reference_features = [H.edges[e].feature for H in reference_hypergraphs for e in H.edges]
+        
+        return wasserstein_distance(predicted_features, reference_features)

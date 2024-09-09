@@ -1,7 +1,0 @@
-name: hypergraphSBM
-min_size: 32
-max_size: 32
-p: 0.05
-q: 0.001
-k: 3
-load: true

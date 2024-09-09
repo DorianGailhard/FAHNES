@@ -76,29 +76,24 @@ def get_expansion_items(cfg: DictConfig, train_hypergraphs):
     else:
         sign_net = None
 
-    features = 2 if cfg.diffusion.name == "discrete" else 1
     if cfg.model.name == "ppgn":
         model = gg.model.SparsePPGN(
-            node_in_features=features * (1 + cfg.diffusion.self_conditioning),
-            edge_in_features=features * (1 + cfg.diffusion.self_conditioning),
-            node_out_features=features,
-            edge_out_features=features,
-            emb_features=cfg.model.emb_features,
-            hidden_features=cfg.model.hidden_features,
-            ppgn_features=cfg.model.ppgn_features,
+            node_in_features=cfg.dataset.node_features_dim,
+            node_out_features=cfg.dataset.node_features_dim,
+            node_emb_features=cfg.model.node_emb_features,
+            hyperedge_in_features=cfg.dataset.hyperedge_features_dim,
+            hyperedge_out_features=cfg.dataset.hyperedge_features_dim,
+            hyperedge_emb_features=cfg.model.hyperedge_emb_features,
+            expansion_node_in_features=1,
+            expansion_edge_in_features=1,
+            expansion_node_out_features=1,
+            expansion_edge_out_features=1,
+            expansion_emb_features=cfg.model.expansion_emb_features,
+            hidden_features=cfg.model.expansion_hidden_features,
+            ppgn_features=cfg.model.expansion_ppgn_features,
             num_layers=cfg.model.num_layers,
             dropout=cfg.model.dropout,
-        )
-    elif cfg.model.name == "gine":
-        model = gg.model.GINE(
-            node_in_features=features * (1 + cfg.diffusion.self_conditioning),
-            edge_in_features=features * (1 + cfg.diffusion.self_conditioning),
-            node_out_features=features,
-            edge_out_features=features,
-            emb_features=cfg.model.emb_features,
-            hidden_features=cfg.model.hidden_features,
-            num_layers=cfg.model.num_layers,
-            dropout=cfg.model.dropout,
+            self_conditioning=cfg.diffusion.self_conditioning
         )
     else:
         raise ValueError(f"Unknown model name: {cfg.model.name}")
@@ -135,6 +130,8 @@ def get_expansion_items(cfg: DictConfig, train_hypergraphs):
         "method": method,
         "model": model,
         "sign_net": sign_net,
+        "node_features_dim": cfg.dataset.node_features_dim,
+        "edge_features_dim": cfg.dataset.edge_features_dim
     }
 
 @hydra.main(config_path="config", config_name="config", version_base="1.3")
@@ -196,18 +193,12 @@ def main(cfg: DictConfig):
         gg.metrics.Uniqueness(),
         gg.metrics.Novelty(),
     ]
+    
+    if cfg.dataset.node_features_dim:
+        validation_metrics += [gg.metrics.NodeFeaturesWasserstein()]
 
-    if "hypergraphEgo" in cfg.dataset.name:
-        validation_metrics += [gg.metrics.ValidEgo(),
-        ]
-        
-    if "hypergraphTree" in cfg.dataset.name:
-        validation_metrics += [gg.metrics.ValidHypertree(),
-        ]
-        
-    if "hypergraphSBM" in cfg.dataset.name:
-        validation_metrics += [gg.metrics.ValidSBM(),
-        ]
+    if cfg.dataset.hyperedge_features_dim:
+        validation_metrics += [gg.metrics.HyperedgeFeaturesWasserstein()]
 
     # Method
     if cfg.method.name == "expansion":

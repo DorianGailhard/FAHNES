@@ -1,4 +1,4 @@
-name: hypergraph-generation
+name: hypergraph-generation-features
 channels:
   - pytorch
   - pyg

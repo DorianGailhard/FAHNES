@@ -1,7 +1,7 @@
 defaults:
   - _self_
-  - dataset: hypergraphErdosRenyi
-  - diffusion: discrete
+  - dataset: shapeNetBench
+  - diffusion: edm
   - method: expansion
 
 dataset:
@@ -37,6 +37,7 @@ training:
   log_interval: 100
   save_checkpoint: True
   resume: False # if True, resume from last checkpoint, if number, resume from that step
+  visualization: mesh
 
 validation:
   batch_size: null
@@ -48,9 +49,9 @@ testing: False # if True, only evaluate on test set
 
 model:
   name: ppgn
-  emb_features: 32
-  hidden_features: 256
-  ppgn_features: 128
+  expansion_emb_features: 32
+  expansion_hidden_features: 256
+  expansion_ppgn_features: 128
   num_layers: 10
   dropout: 0.1
 

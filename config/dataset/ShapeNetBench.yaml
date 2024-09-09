@@ -1,0 +1,4 @@
+name: hypergraphEgo
+node_features_dim: 3
+hyperedge_features_dim: None
+load: true

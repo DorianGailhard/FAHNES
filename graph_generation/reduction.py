@@ -23,10 +23,24 @@ class Reduction(ABC):
     red_threshold: int
     rand_lambda: int
 
-    def __init__(self, bipartite_adj, clique_adj, lap=None, B=None, expansion_matrix=None, level=0):
+    def __init__(self, bipartite_adj, clique_adj, node_features, hyperedge_features, node_cluster_size=None, edge_cluster_size=None, lap=None, B=None, expansion_matrix=None, level=0):
         self.bipartite_adj = bipartite_adj
         self.clique_adj = clique_adj
-        self.n = self.clique_adj.shape[0]
+        self.n = clique_adj.shape[0]
+
+        self.node_features = node_features
+        
+        if node_cluster_size:
+            self.node_cluster_size = node_cluster_size
+        else:
+            self.node_cluster_size = np.ones(self.n)
+        
+        self.hyperedge_features = hyperedge_features
+        
+        if edge_cluster_size:
+            self.edge_cluster_size = edge_cluster_size
+        else:
+            self.edge_cluster_size = np.ones(bipartite_adj.shape[0] - self.n)
         
         self.node_degree = self.clique_adj.sum(0)
         self.lap = sp.sparse.diags(self.node_degree) - self.clique_adj if lap is None else lap
@@ -86,9 +100,46 @@ class Reduction(ABC):
         # Add the edge_lifting_matrix to the expansion matrix
         expansion_matrix = bmat([[P_inv, None], [None, edge_lifting_matrix]], format='coo')
         
+        # Compute coarsened features and new cluster sizes
+        if self.node_features:
+            # Weight the features by the current node_cluster_size
+            weighted_features = self.node_features * self.node_cluster_size[..., np.newaxis]
+            summed_weighted_features = np.einsum('ij...,ji->i...', weighted_features, P_inv.T)
+            
+            # Compute the sum of weights for each cluster
+            summed_weights = np.dot(P_inv.T, self.node_cluster_size)
+            
+            # Compute the weighted average features for each cluster
+            summed_weights_reshaped = summed_weights.reshape((-1,) + (1,) * (summed_weighted_features.ndim - 1))
+            node_features = summed_weighted_features / summed_weights_reshaped
+            
+            # Update the node_cluster_size
+            node_cluster_size = summed_weights
+            
+            
+        if self.hyperedge_features:
+            # Weight the features by the current node_cluster_size
+            weighted_features = self.ege_features * self.edge_cluster_size[..., np.newaxis]
+            summed_weighted_features = np.einsum('ij...,ji->i...', weighted_features, edge_lifting_matrix.T)
+            
+            # Compute the sum of weights for each cluster
+            summed_weights = np.dot(edge_lifting_matrix.T, self.edge_cluster_size)
+            
+            # Compute the weighted average features for each cluster
+            summed_weights_reshaped = summed_weights.reshape((-1,) + (1,) * (summed_weighted_features.ndim - 1))
+            hyperedge_features = summed_weighted_features / summed_weights_reshaped
+            
+            # Update the node_cluster_size
+            edge_cluster_size = summed_weights
+        
+        
         return self.__class__(
             bipartite_adj=bipartite_adjacency,
             clique_adj=adj_clique_reduced,
+            node_features=node_features,
+            hyperedge_features=hyperedge_features,
+            node_cluster_size=node_cluster_size,
+            edge_cluster_size=edge_cluster_size,
             lap=lap_reduced,
             B=C @ self.B,
             expansion_matrix=expansion_matrix,
@@ -164,7 +215,7 @@ class Reduction(ABC):
         return collapsed_incidence_matrix, collapsed_lifting_matrix
     
 
-    def get_coarsening_matrix(self, rng) -> coo_array:
+    def get_coarsening_matrix(self, rng):
         # get the contraction sets and their costs
         contraction_sets = self.get_contraction_sets()
         costs = (
@@ -376,6 +427,15 @@ class ReductionFactory:
             reduction.local_variation_cost = False
         else:
             raise ValueError("Unknown reduction cost type.")
+            
+        node_features = None
+        hyperedge_features= None
+        
+        if H.nodes[next(iter(H.nodes))].feature:
+            node_features = np.array([H.nodes[i].feature for i in H.nodes])
+        
+        if H.edges[next(iter(H.edges))].feature:
+            hyperedge_features = np.array([H.edges[i].feature for i in H.edges])
 
         reduction.preserved_eig_size = self.preserved_eig_size
         reduction.sqrt_partition_size = self.sqrt_partition_size
@@ -385,4 +445,4 @@ class ReductionFactory:
         reduction.red_threshold = self.red_threshold
         reduction.rand_lambda = self.rand_lambda
 
-        return reduction(self.getBipartiteAdj(H), self.getCliqueAdj(H))
+        return reduction(self.getBipartiteAdj(H), self.getCliqueAdj(H), node_features, hyperedge_features)

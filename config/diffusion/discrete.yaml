@@ -1,3 +1,0 @@
-name: discrete
-num_steps: 1024
-self_conditioning: False
