@@ -101,7 +101,7 @@ class Reduction(ABC):
         expansion_matrix = bmat([[P_inv, None], [None, edge_lifting_matrix]], format='coo')
         
         # Compute coarsened features and new cluster sizes
-        if self.node_features:
+        if hasattr(self, 'node_features'):
             # Weight the features by the current node_cluster_size
             weighted_features = self.node_features * self.node_cluster_size[..., np.newaxis]
             summed_weighted_features = np.einsum('ij...,ji->i...', weighted_features, P_inv.T)
@@ -117,7 +117,7 @@ class Reduction(ABC):
             node_cluster_size = summed_weights
             
             
-        if self.hyperedge_features:
+        if hasattr(self, 'hyperedge_features'):
             # Weight the features by the current node_cluster_size
             weighted_features = self.ege_features * self.edge_cluster_size[..., np.newaxis]
             summed_weighted_features = np.einsum('ij...,ji->i...', weighted_features, edge_lifting_matrix.T)
@@ -431,10 +431,10 @@ class ReductionFactory:
         node_features = None
         hyperedge_features= None
         
-        if H.nodes[next(iter(H.nodes))].feature:
+        if hasattr(H.nodes[next(iter(H.nodes))], 'feature'):
             node_features = np.array([H.nodes[i].feature for i in H.nodes])
         
-        if H.edges[next(iter(H.edges))].feature:
+        if hasattr(H.edges[next(iter(H.edges))], 'feature'):
             hyperedge_features = np.array([H.edges[i].feature for i in H.edges])
 
         reduction.preserved_eig_size = self.preserved_eig_size

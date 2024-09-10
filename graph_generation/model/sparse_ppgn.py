@@ -36,7 +36,7 @@ class SparsePPGN(Module):
         super().__init__()
         
         # Feature type
-        if node_in_features and isinstance(node_in_features, int):
+        if node_in_features != 0 and isinstance(node_in_features, int):
             self.node_features = 0 # coding for vector feature
             self.node_features_dim = node_in_features
         else:

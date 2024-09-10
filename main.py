@@ -70,7 +70,7 @@ def get_expansion_items(cfg: DictConfig, train_hypergraphs):
         sign_net = gg.model.SignNet(
             num_eigenvectors=cfg.spectral.num_features,
             hidden_features=cfg.sign_net.hidden_features,
-            out_features=cfg.model.emb_features,
+            out_features=cfg.model.expansion_emb_features,
             num_layers=cfg.sign_net.num_layers,
         )
     else:
@@ -89,8 +89,8 @@ def get_expansion_items(cfg: DictConfig, train_hypergraphs):
             expansion_node_out_features=1,
             expansion_edge_out_features=1,
             expansion_emb_features=cfg.model.expansion_emb_features,
-            hidden_features=cfg.model.expansion_hidden_features,
-            ppgn_features=cfg.model.expansion_ppgn_features,
+            hidden_features=cfg.model.hidden_features,
+            ppgn_features=cfg.model.ppgn_features,
             num_layers=cfg.model.num_layers,
             dropout=cfg.model.dropout,
             self_conditioning=cfg.diffusion.self_conditioning
@@ -116,7 +116,7 @@ def get_expansion_items(cfg: DictConfig, train_hypergraphs):
     method = gg.method.Expansion(
         diffusion=diffusion,
         spectrum_extractor=spectrum_extractor,
-        emb_features=cfg.model.emb_features,
+        emb_features=cfg.model.expansion_emb_features,
         augmented_radius=cfg.method.augmented_radius,
         augmented_dropout=cfg.method.augmented_dropout,
         deterministic_expansion=cfg.method.deterministic_expansion,
@@ -129,9 +129,7 @@ def get_expansion_items(cfg: DictConfig, train_hypergraphs):
         "train_dataloader": train_dataloader,
         "method": method,
         "model": model,
-        "sign_net": sign_net,
-        "node_features_dim": cfg.dataset.node_features_dim,
-        "edge_features_dim": cfg.dataset.edge_features_dim
+        "sign_net": sign_net
     }
 
 @hydra.main(config_path="config", config_name="config", version_base="1.3")
@@ -194,10 +192,10 @@ def main(cfg: DictConfig):
         gg.metrics.Novelty(),
     ]
     
-    if cfg.dataset.node_features_dim:
+    if cfg.dataset.node_features_dim != 0:
         validation_metrics += [gg.metrics.NodeFeaturesWasserstein()]
 
-    if cfg.dataset.hyperedge_features_dim:
+    if cfg.dataset.hyperedge_features_dim != 0:
         validation_metrics += [gg.metrics.HyperedgeFeaturesWasserstein()]
 
     # Method

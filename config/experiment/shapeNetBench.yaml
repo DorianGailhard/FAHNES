@@ -8,6 +8,8 @@ name: shapeNetBench
 
 dataset:
   name: shapeNetBench
+  node_features_dim: 3
+  hyperedge_features_dim: 0
 
 training:
   batch_size: 10
