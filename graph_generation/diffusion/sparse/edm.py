@@ -40,7 +40,7 @@ class EDMModel(Module):
         edge_batch = batch[edge_index[0]]
         edge_attr_in = c_in[edge_batch] * edge_attr
         
-        if node_features:
+        if node_features is not None:
             node_features_in = c_in[batch] * node_features
 
         # self-conditioning
@@ -52,7 +52,7 @@ class EDMModel(Module):
             elif np.random.rand() < 0.5:
                 # compute self-conditioning
                 with th.no_grad():
-                    node_attr_self_cond, edge_node_attr_self_cond, edge_attr_self_cond, node_features_self_cond = model(
+                    node_attr_self_cond, edge_node_attr_self_cond, edge_attr_self_cond, node_features_nodes_self_cond, node_features_edge_nodes_self_cond = model(
                         edge_index=edge_index,
                         batch=batch,
                         node_type=node_type,
@@ -68,7 +68,7 @@ class EDMModel(Module):
                         **model_kwargs,
                         node_features=th.cat(
                             [node_features_in, th.zeros_like(node_features_in)], dim=-1
-                        ).float() if node_features else None,
+                        ).float() if node_features is not None else None,
                     )
                     node_attr_self_cond = (
                         c_skip[batch[node_type == 1]] * node_attr + c_out[batch[node_type == 1]] * node_attr_self_cond
@@ -81,16 +81,26 @@ class EDMModel(Module):
                         + c_out[edge_batch] * edge_attr_self_cond
                     ).detach()
                     
-                    if node_features:
-                        node_features_self_cond = (
-                            c_skip[batch] * node_features + c_out[batch] * node_features_self_cond
-                        ).detach()
+                    if node_features is not None:
+                        node_features_self_cond = th.zeros_like(node_features)
+                        
+                        n_dims = node_features_nodes_self_cond.dim()
+                        c_skip_expanded = c_skip[batch[node_type == 1]].view(-1, *([1] * (n_dims - 1)))
+                        c_out_expanded = c_out[batch[node_type == 1]].view(-1, *([1] * (n_dims - 1)))
+                        node_features_self_cond[node_type == 1] = c_skip_expanded * node_features[node_type == 1] + c_out_expanded * node_features_nodes_self_cond
+                        
+                        n_dims = node_features_edge_nodes_self_cond.dim()
+                        c_skip_expanded = c_skip[batch[node_type == 0]].view(-1, *([1] * (n_dims - 1)))
+                        c_out_expanded = c_out[batch[node_type == 0]].view(-1, *([1] * (n_dims - 1)))
+                        node_features_self_cond[node_type == 0] = c_skip_expanded * node_features[node_type == 0] + c_out_expanded * node_features_edge_nodes_self_cond
+                        
+                        node_features_self_cond = node_features_self_cond.detach()
             else:
                 node_attr_self_cond = th.zeros_like(node_attr)
                 edge_node_attr_self_cond = th.zeros_like(edge_node_attr)
                 edge_attr_self_cond = th.zeros_like(edge_attr)
                 
-                if node_features:
+                if node_features is not None:
                     node_features_self_cond = th.zeros_like(node_features)
 
             # scale self-conditioning
@@ -103,7 +113,7 @@ class EDMModel(Module):
             edge_node_attr_in = th.cat([edge_node_attr_in, edge_node_attr_self_cond], dim=-1)
             edge_attr_in = th.cat([edge_attr_in, edge_attr_self_cond], dim=-1)
             
-            if node_features:
+            if node_features is not None:
                 node_features_self_cond = node_features_self_cond / sigma_data
                 node_features_in = th.cat([node_features_in, node_features_self_cond], dim=-1)
 
@@ -124,12 +134,18 @@ class EDMModel(Module):
             c_skip[edge_batch] * edge_attr + c_out[edge_batch] * edge_attr_pred
         )
         
-        node_features_pred = None
-        
-        if node_features:
-            node_features_pred = c_skip[batch] * node_features + c_out[batch] * node_features_pred
+        if node_features is not None:
+            n_dims = node_features_nodes_pred.dim()
+            c_skip_expanded = c_skip[batch[node_type == 1]].view(-1, *([1] * (n_dims - 1)))
+            c_out_expanded = c_out[batch[node_type == 1]].view(-1, *([1] * (n_dims - 1)))
+            node_features_nodes_pred = c_skip_expanded * node_features[node_type == 1] + c_out_expanded * node_features_nodes_pred
+            
+            n_dims = node_features_edge_nodes_pred.dim()
+            c_skip_expanded = c_skip[batch[node_type == 0]].view(-1, *([1] * (n_dims - 1)))
+            c_out_expanded = c_out[batch[node_type == 0]].view(-1, *([1] * (n_dims - 1)))
+            node_features_edge_nodes_pred = c_skip_expanded * node_features[node_type == 0] + c_out_expanded * node_features_edge_nodes_pred
 
-        return node_attr_pred, edge_node_attr_pred, edge_attr_pred, node_features_pred
+        return node_attr_pred, edge_node_attr_pred, edge_attr_pred, node_features_nodes_pred, node_features_edge_nodes_pred
 
 
 class EDM:
@@ -176,9 +192,11 @@ class EDM:
         edge_node_noise = th.randn_like(edge_node_attr) * t[batch[node_type == 0]]
         edge_noise = self.edge_randn(edge_index) * t[edge_batch]
         
-        if node_features:
-            node_features = th.randn((node_type.shape[0],) + node_features.shape[1:])
-            node_features[node_type == 1] = node_features[node_type == 1] * t[batch[node_type == 1]] + node_features
+        if node_features is not None:
+            node_features_full = th.randn((node_type.shape[0],) + node_features.shape[1:], device=self.device)
+            n_dims = node_features_full[node_type == 1].dim()
+            t_expanded = t[batch[node_type == 1]].view(-1, *([1] * (n_dims - 1)))
+            node_features_full[node_type == 1] = node_features_full[node_type == 1] * t_expanded + node_features
 
         # make prediction
         node_pred, edge_node_pred, edge_pred, node_features_nodes_pred, node_features_edge_nodes_pred = self.model_wrapper(
@@ -188,7 +206,7 @@ class EDM:
             node_attr=(node_attr + node_noise).unsqueeze(1),
             edge_node_attr=(edge_node_attr + edge_node_noise).unsqueeze(1),
             edge_attr=(edge_attr + edge_noise).unsqueeze(1),
-            node_features=node_features,
+            node_features=node_features_full,
             t=t,
             model=model,
             model_kwargs=model_kwargs,
@@ -205,10 +223,12 @@ class EDM:
         
         node_features_loss = None
         
-        if batch.node_features:
-            node_features_loss = weight[batch[node_type == 1]] * (batch.node_features - node_features_nodes_pred)**2
+        if node_features is not None:
+            n_dims = node_features.dim()
+            weight_expanded = weight[batch[node_type == 1]].view(-1, *([1] * (n_dims - 1)))
+            node_features_loss = weight_expanded * (node_features - node_features_nodes_pred)**2
             
-        return node_loss, edge_node_loss, edge_loss, node_features_loss
+        return node_loss, edge_node_loss, edge_loss, node_features_loss, None
 
     @th.no_grad()
     def sample(self, edge_index, node_type, node_features, hyperedge_features, batch, model, model_kwargs):
@@ -235,11 +255,12 @@ class EDM:
         edge_node_attr_pred = th.zeros_like(edge_node_attr_next)
         edge_attr_pred = th.zeros_like(edge_attr_next)
         
-        if node_features:
-            node_features_next = th.randn((node_type.shape[0],) + node_features.shape[1:])[:, None] * t_steps[0]
-            node_features_pred = th.zeros_like(node_features_next)
-            
         node_features_hat = None
+        node_features_next = None
+        
+        if node_features is not None:
+            node_features_next = th.randn((node_type.shape[0],) + node_features.shape[1:], device=self.device, dtype=th.float64) * t_steps[0]
+            node_features_pred = th.zeros_like(node_features_next)
         
         # sample loop
         for i, (t_cur, t_next) in enumerate(zip(t_steps[:-1], t_steps[1:])):
@@ -267,7 +288,7 @@ class EDM:
                 * self.edge_randn(edge_index, dtype=th.float64)[:, None]
             )
             
-            if node_features:
+            if node_features is not None:
                 node_features_cur = node_features_next
                 node_features_hat = node_features_cur + (
                     t_hat**2 - t_cur**2
@@ -295,15 +316,13 @@ class EDM:
             edge_node_attr_next = edge_node_attr_hat + (t_next - t_hat) * edge_node_attr_d
             edge_attr_next = edge_attr_hat + (t_next - t_hat) * edge_attr_d
             
-            if node_features:
+            if node_features is not None:
                 node_features_pred = th.zeros_like(node_features_hat)
                 node_features_pred[node_type == 1] = node_features_nodes_pred
-                node_features_pred[node_type == 1] = node_features_edge_nodes_pred
+                node_features_pred[node_type == 0] = node_features_edge_nodes_pred
                 
                 node_features_d = (node_features_hat - node_features_pred) / t_hat
                 node_features_next = node_features_hat + (t_next - t_hat) * node_features_d
-
-            node_features_next = None
             
             # 2nd order correction
             if i < self.num_steps - 1:
@@ -334,9 +353,9 @@ class EDM:
                     0.5 * edge_attr_d + 0.5 * edge_attr_d_prime
                 )
                 
-                if node_features:
+                if node_features is not None:
                     node_features_pred[node_type == 1] = node_features_nodes_pred
-                    node_features_pred[node_type == 1] = node_features_edge_nodes_pred
+                    node_features_pred[node_type == 0] = node_features_edge_nodes_pred
                     
                     node_features_d_prime = (node_features_next - node_features_pred) / t_next
                     node_features_next = node_features_hat + (t_next - t_hat) * (

@@ -21,6 +21,7 @@ class RandRedDataset(IterableDataset, ABC):
     def get_random_reduction_sequence(self, reduction_level_zero, rng):
         data = []
         red = reduction_level_zero
+        print(red.n)
         while True:
             reduced_hypergraph = red.get_reduced_hypergraph(rng)
             

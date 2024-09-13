@@ -34,7 +34,7 @@ class Expansion(Method):
         self.max_red_frac = max_red_frac
         self.red_threshold = red_threshold
 
-    def sample_hypergraphs(self, target_size, model: Module, sign_net: Module, node_features_dim: tuple, edge_features_dim: tuple):
+    def sample_hypergraphs(self, target_size, model: Module, sign_net: Module, node_features_dim: tuple, hyperedge_features_dim: tuple):
         """Samples a batch of hypergraphs."""
         num_hypergraphs = len(target_size)
         
@@ -50,22 +50,22 @@ class Expansion(Method):
         node_type[1::2] = 0
         
         node_features = None
-        edge_features = None
+        hyperedge_features = None
         
         if node_features_dim:
-            node_features = th.randn((num_hypergraphs) + node_features_dim, device=self.device)
+            node_features = th.randn((num_hypergraphs,) + (node_features_dim if isinstance(node_features_dim, tuple) else (node_features_dim,)), device=self.device)
             
-        if edge_features_dim:
-            edge_features = th.randn((num_hypergraphs) + edge_features_dim, device=self.device)
+        if hyperedge_features_dim:
+            hyperedge_features = th.randn((num_hypergraphs,) + (hyperedge_features_dim if isinstance(hyperedge_features_dim, tuple) else (hyperedge_features_dim,)), device=self.device)
         
         while node_type.sum() < target_size.sum():
-            adj, batch, node_expansion, node_type, node_features, edge_features = self.expand(
+            adj, batch, node_expansion, node_type, node_features, hyperedge_features = self.expand(
                 adj,
                 batch,
                 node_expansion,
                 node_type,
                 node_features,
-                edge_features,
+                hyperedge_features,
                 target_size,
                 model=model,
                 sign_net=sign_net,
@@ -74,16 +74,19 @@ class Expansion(Method):
                 break
                 
         # return hypergraphs
-        if node_features:
-            node_features = node_features.numpy()
+        if node_features is not None:
+            node_features = node_features.cpu().numpy()
             
-        if edge_features:
-            edge_features = edge_features.numpy()
+        if hyperedge_features is not None:
+            hyperedge_features = hyperedge_features.cpu().numpy()
         
-        adjs, num_nodes, node_features_unbatched, edge_features_unbatched = unbatch_adj(adj, batch, node_type, node_features, edge_features)
+        adjs, num_nodes, node_features_unbatched, hyperedge_features_unbatched = unbatch_adj(adj, batch, node_type, node_features, hyperedge_features)
         hypergraphs = []
         
-        for (adj, n, node_features_item, edge_features_item) in zip(adjs, num_nodes, node_features_unbatched, edge_features_unbatched):
+        for i in range(len(adjs)):
+            adj = adjs[i]
+            n = num_nodes[i]
+            
             # remind that we have :
             # Adj_bipartite = ( 0  H)
             #                 (H^T 0)
@@ -100,11 +103,13 @@ class Expansion(Method):
                 H = hnx.Hypergraph(np.ones((2,2)))
                 hypergraphs.append(H)
                 
-            if node_features:
-                H.add_nodes_from([ (node, node_features_item[i]) for (i, node) in enumerate(H.nodes)])
+            if node_features_unbatched is not None:
+                node_features = node_features_unbatched[i]
+                H.add_nodes_from([ (node, {"feature": node_features[i]}) for (i, node) in enumerate(H.nodes)])
             
-            if edge_features:
-                H.add_edges_from([ (edge, edge_features_item[i]) for (i, edge) in enumerate(H.edges)])
+            if hyperedge_features_unbatched is not None:
+                hyperedge_features = hyperedge_features_unbatched[i]
+                H.add_edges_from([ (edge, {"feature": hyperedge_features[i]}) for (i, edge) in enumerate(H.edges)])
         
         return hypergraphs
 
@@ -137,11 +142,15 @@ class Expansion(Method):
         expanded_node_features = None
         expanded_hyperedge_features = None
         
-        if node_features:
-            expanded_node_features = node_features[node_map]
+        if node_features is not None:
+            expanded_node_features = node_features[th.repeat_interleave(
+                th.arange(0, node_features.size(0), device=self.device), node_expansion[node_type == 1]
+            )]
         
-        if hyperedge_features:
-            expanded_hyperedge_features = hyperedge_features[node_map]
+        if hyperedge_features is not None:
+            expanded_hyperedge_features = hyperedge_features[th.repeat_interleave(
+                th.arange(0, hyperedge_features.size(0), device=self.device), node_expansion[node_type == 0]
+            )]
         
         
         size = scatter(expanded_node_type, batch)
@@ -162,7 +171,7 @@ class Expansion(Method):
                         dtype=th.float32,
                         device=self.device,
                     )
-                    for adj in unbatch_adj(adj_reduced, batch_reduced, node_type)[0]
+                    for adj in unbatch_adj(adj_reduced, batch_reduced, node_type, node_features, hyperedge_features)[0]
                 ]
             )
             both_type_node_emb_reduced = sign_net(
@@ -202,7 +211,7 @@ class Expansion(Method):
         )
 
         # make predictions
-        node_pred, edge_node_pred, augmented_edge_pred, node_features_pred, edge_features_pred = self.diffusion.sample(
+        node_pred, edge_node_pred, augmented_edge_pred, node_features_pred, hyperedge_features_pred = self.diffusion.sample(
             edge_index=augmented_edge_index,
             batch=batch,
             node_type=expanded_node_type,
@@ -250,12 +259,13 @@ class Expansion(Method):
         all_node_attr[expanded_node_type == 0] = edge_node_attr
         all_node_attr[expanded_node_type == 1] = node_attr
         
-        return adj, batch, all_node_attr + 1, expanded_node_type, node_features_pred, edge_features_pred
+        return adj, batch, all_node_attr + 1, expanded_node_type, node_features_pred, hyperedge_features_pred
 
     def get_loss(self, batch, model: Module, sign_net: Module):
         """Returns a weighted sum of the node and edge expansion loss and the augmented edge loss."""
+        expansion_numbers = batch.expansion_matrix.sum(0).long()
         node_map = th.repeat_interleave(
-            th.arange(0, batch.adj_reduced.size(0), device=self.device), batch.expansion_matrix.sum(0).long()
+            th.arange(0, batch.adj_reduced.size(0), device=self.device), expansion_numbers
         )
         
         # get augmented hypergraph
@@ -286,12 +296,15 @@ class Expansion(Method):
         
         node_features = None
         hyperedge_features = None
-        
-        if batch.node_features:
-            node_features = batch.node_features_reduced[node_map[batch.node_type == 1]]
+        if hasattr(batch, 'node_features'):
+            node_features = batch.node_features_reduced[th.repeat_interleave(
+                th.arange(0, batch.node_features_reduced.size(0), device=self.device), expansion_numbers[batch.node_type_reduced == 1]
+            )]
             
-        if batch.edge_features:
-            hyperedge_features = batch.hyperedge_features_reduced[node_map[batch.node_type == 0]]
+        if hasattr(batch, 'hyperedge_features'):
+            hyperedge_features = batch.hyperedge_features_reduced[th.repeat_interleave(
+                th.arange(0, batch.hyperedge_features_reduced.size(0), device=self.device), expansion_numbers[batch.node_type_reduced == 0]
+            )]
             
         # reduction fraction
         size = scatter(batch.node_type, batch.batch)
@@ -328,18 +341,19 @@ class Expansion(Method):
             "node_expansion_loss": node_loss.item(),
             "edge_node_expansion_loss": edge_node_loss.item(),
             "augmented_edge_loss": edge_loss.item(),
-            "loss": loss.item(),
         }
         
-        if batch.node_features:
+        if hasattr(batch, 'node_features'):
             node_features_loss = node_features_loss[batch.reduction_level[batch.batch[batch.node_type == 1]] > 0].mean()
             loss += node_features_loss
             res["node_features_loss"] = node_features_loss.item()
         
-        if batch.edge_features:
+        if hasattr(batch, 'hyperedge_features'):
             hyperedge_features_loss = hyperedge_features_loss[batch.reduction_level[batch.batch[batch.node_type == 0]] > 0].mean()
             loss += hyperedge_features_loss
-            res["edge_features_loss"] = hyperedge_features_loss.item()
+            res["hyperedge_features_loss"] = hyperedge_features_loss.item()
+            
+        res["loss"] = loss.item()
             
         return loss, res
 
@@ -388,7 +402,7 @@ class Expansion(Method):
         return adj_augmented
 
 
-def unbatch_adj(adj, batch, node_type, node_features, edge_features) -> tuple:
+def unbatch_adj(adj, batch, node_type, node_features, hyperedge_features) -> tuple:
     size = scatter(th.ones_like(batch), batch)
     
     hypergraph_end_idx = size.cumsum(0)
@@ -397,22 +411,19 @@ def unbatch_adj(adj, batch, node_type, node_features, edge_features) -> tuple:
     n_nodes = [th.sum(node_type[hypergraph_start_idx[i] : hypergraph_end_idx[i]]).item() for i in range(len(size))]
     
     node_features_unbatched = None
-    edge_features_unbatched = None
+    hyperedge_features_unbatched = None
     
-    if node_features:
-        node_features_end_idx = n_nodes.cumsum(0)
+    if node_features is not None:
+        node_features_end_idx = np.cumsum(n_nodes)
         node_features_start_idx = node_features_end_idx - n_nodes
         node_features_unbatched = [node_features[node_features_start_idx[i] : node_features_end_idx[i]] for i in range(len(n_nodes))]
     
-    if edge_features:
+    if hyperedge_features is not None:
         n_hyperedges = [th.sum(1 - node_type[hypergraph_start_idx[i] : hypergraph_end_idx[i]]).item() for i in range(len(size))]
         
-        edge_features_end_idx = n_hyperedges.cumsum(0)
-        edge_features_start_idx = edge_features_end_idx - n_hyperedges
-        edge_features_unbatched = [edge_features[edge_features_start_idx[i] : edge_features_end_idx[i]] for i in range(len(n_hyperedges))]
+        hyperedge_features_end_idx = np.cumsum(n_hyperedges)
+        hyperedge_features_start_idx = hyperedge_features_end_idx - n_hyperedges
+        hyperedge_features_unbatched = [hyperedge_features[hyperedge_features_start_idx[i] : hyperedge_features_end_idx[i]] for i in range(len(n_hyperedges))]
     
     return [ adj[hypergraph_start_idx[i] : hypergraph_end_idx[i], :][:, hypergraph_start_idx[i] : hypergraph_end_idx[i] ]
-    for i in range(len(size)) ],
-    n_nodes,
-    node_features_unbatched,
-    edge_features_unbatched
+    for i in range(len(size)) ], n_nodes, node_features_unbatched, hyperedge_features_unbatched

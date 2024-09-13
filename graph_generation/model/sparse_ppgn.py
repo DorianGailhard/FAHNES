@@ -104,7 +104,7 @@ class SparsePPGN(Module):
         red_frac_emb = self.red_frac_emb_layer(red_frac[..., None])
         target_size_emb = self.target_size_emb_layer(target_size[..., None])
         
-        if self.features_node == 0: # vector features
+        if self.node_features == 0: # vector features
             node_features_emb = self.features_node_emb_layer(node_features)
         
         # Input
@@ -277,7 +277,7 @@ class SparsePPGN(Module):
             reduce="mean",
         )[1]
 
-        return out_node[self.node_features_dim:], out_edge_node[self.node_features_dim:], out_edge, out_node[:self.node_features_dim], out_edge_node[:self.node_features_dim]
+        return out_node[:,self.node_features_dim:], out_edge_node[:, self.node_features_dim:], out_edge, out_node[:, :self.node_features_dim], out_edge_node[:, :self.node_features_dim]
 
 
 class SparsePPGNLayer(Module):

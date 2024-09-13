@@ -30,14 +30,14 @@ class Reduction(ABC):
 
         self.node_features = node_features
         
-        if node_cluster_size:
+        if node_cluster_size is not None:
             self.node_cluster_size = node_cluster_size
         else:
             self.node_cluster_size = np.ones(self.n)
         
         self.hyperedge_features = hyperedge_features
         
-        if edge_cluster_size:
+        if edge_cluster_size is not None:
             self.edge_cluster_size = edge_cluster_size
         else:
             self.edge_cluster_size = np.ones(bipartite_adj.shape[0] - self.n)
@@ -63,7 +63,6 @@ class Reduction(ABC):
             else expansion_matrix.sum(0)[self.n:].astype(np.int32)
         )
         self.level = level
-          
 
     def get_reduced_hypergraph(self, rng=np.random.default_rng()):
         # Compute the coarsened clique representation
@@ -101,36 +100,54 @@ class Reduction(ABC):
         expansion_matrix = bmat([[P_inv, None], [None, edge_lifting_matrix]], format='coo')
         
         # Compute coarsened features and new cluster sizes
-        if hasattr(self, 'node_features'):
-            # Weight the features by the current node_cluster_size
-            weighted_features = self.node_features * self.node_cluster_size[..., np.newaxis]
-            summed_weighted_features = np.einsum('ij...,ji->i...', weighted_features, P_inv.T)
-            
-            # Compute the sum of weights for each cluster
-            summed_weights = np.dot(P_inv.T, self.node_cluster_size)
-            
-            # Compute the weighted average features for each cluster
-            summed_weights_reshaped = summed_weights.reshape((-1,) + (1,) * (summed_weighted_features.ndim - 1))
+        node_cluster_size = None
+        node_features = None
+        if self.node_features is not None:
+            # Step 1: Weight the features by the current node_cluster_size
+            broadcast_shape = self.node_cluster_size.shape + (1,) * (self.node_features.ndim - 1)
+            weighted_features = self.node_features * self.node_cluster_size.reshape(broadcast_shape)
+    
+            # Step 2: Reshape weighted features to 2D for sparse matrix multiplication
+            original_shape = weighted_features.shape
+            reshaped_weighted_features = weighted_features.reshape((original_shape[0], -1))  # (n, d1*d2*...)
+    
+            # Sparse matrix multiplication i.e. sum features of the nodes inside each cluster
+            summed_weighted_features = P_inv.T @ reshaped_weighted_features  # (k, d1*d2*...)
+    
+            # Reshape back to the original feature dimensions
+            summed_weighted_features = summed_weighted_features.reshape((P_inv.T.shape[0],) + original_shape[1:])  # (k, d1, d2, ...)
+    
+            # Step 3: Compute the sum of weights for each cluster
+            node_cluster_size = np.atleast_1d(P_inv.T @ self.node_cluster_size)  # (k,)
+    
+            # Step 4: Reshape summed weights for broadcasting and compute weighted average features
+            summed_weights_reshaped = node_cluster_size.reshape((-1,) + (1,) * (summed_weighted_features.ndim - 1))
             node_features = summed_weighted_features / summed_weights_reshaped
             
-            # Update the node_cluster_size
-            node_cluster_size = summed_weights
             
-            
-        if hasattr(self, 'hyperedge_features'):
-            # Weight the features by the current node_cluster_size
-            weighted_features = self.ege_features * self.edge_cluster_size[..., np.newaxis]
-            summed_weighted_features = np.einsum('ij...,ji->i...', weighted_features, edge_lifting_matrix.T)
-            
-            # Compute the sum of weights for each cluster
-            summed_weights = np.dot(edge_lifting_matrix.T, self.edge_cluster_size)
-            
-            # Compute the weighted average features for each cluster
-            summed_weights_reshaped = summed_weights.reshape((-1,) + (1,) * (summed_weighted_features.ndim - 1))
+        edge_cluster_size = None
+        hyperedge_features = None
+        if self.hyperedge_features is not None:
+            # Step 1: Weight the features by the current node_cluster_size
+            broadcast_shape = self.edge_cluster_size.shape + (1,) * (self.hyperedge_features.ndim - 1)
+            weighted_features = self.hyperedge_features * self.edge_cluster_size.reshape(broadcast_shape)
+    
+            # Step 2: Reshape weighted features to 2D for sparse matrix multiplication
+            original_shape = weighted_features.shape
+            reshaped_weighted_features = weighted_features.reshape((original_shape[0], -1))  # (n, d1*d2*...)
+    
+            # Sparse matrix multiplication i.e. sum features of the nodes inside each cluster
+            summed_weighted_features = edge_lifting_matrix.T @ reshaped_weighted_features  # (k, d1*d2*...)
+    
+            # Reshape back to the original feature dimensions
+            summed_weighted_features = summed_weighted_features.reshape((edge_lifting_matrix.T.shape[0],) + original_shape[1:])  # (k, d1, d2, ...)
+    
+            # Step 3: Compute the sum of weights for each cluster
+            edge_cluster_size = np.atleast_1d(edge_lifting_matrix.T @ self.edge_cluster_size)  # (k,)
+    
+            # Step 4: Reshape summed weights for broadcasting and compute weighted average features
+            summed_weights_reshaped = edge_cluster_size.reshape((-1,) + (1,) * (summed_weighted_features.ndim - 1))
             hyperedge_features = summed_weighted_features / summed_weights_reshaped
-            
-            # Update the node_cluster_size
-            edge_cluster_size = summed_weights
         
         
         return self.__class__(
@@ -431,10 +448,10 @@ class ReductionFactory:
         node_features = None
         hyperedge_features= None
         
-        if hasattr(H.nodes[next(iter(H.nodes))], 'feature'):
+        if H.nodes[next(iter(H.nodes))].feature is not None:
             node_features = np.array([H.nodes[i].feature for i in H.nodes])
         
-        if hasattr(H.edges[next(iter(H.edges))], 'feature'):
+        if H.edges[next(iter(H.edges))].feature is not None:
             hyperedge_features = np.array([H.edges[i].feature for i in H.edges])
 
         reduction.preserved_eig_size = self.preserved_eig_size

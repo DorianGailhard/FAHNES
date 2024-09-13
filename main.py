@@ -146,7 +146,7 @@ def main(cfg: DictConfig):
     if cfg.dataset.load:
         with open(Path("./data") / f"{cfg.dataset.name}.pkl", "rb") as f:
             dataset = pickle.load(f)
-
+        
         train_hypergraphs = dataset["train"]
         validation_hypergraphs = dataset["val"]
         test_hypergraphs = dataset["test"]
@@ -192,11 +192,11 @@ def main(cfg: DictConfig):
         gg.metrics.Novelty(),
     ]
     
-    if cfg.dataset.node_features_dim != 0:
+    """if cfg.dataset.node_features_dim != 0:
         validation_metrics += [gg.metrics.NodeFeaturesWasserstein()]
 
     if cfg.dataset.hyperedge_features_dim != 0:
-        validation_metrics += [gg.metrics.HyperedgeFeaturesWasserstein()]
+        validation_metrics += [gg.metrics.HyperedgeFeaturesWasserstein()]"""
 
     # Method
     if cfg.method.name == "expansion":

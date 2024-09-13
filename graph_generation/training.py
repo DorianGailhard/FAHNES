@@ -101,6 +101,10 @@ class Trainer:
             self.run_id = self.wandb_run.id
         else:
             self.run_id = None
+            
+        # Features
+        self.node_features_dim = cfg.dataset.node_features_dim
+        self.hyperedge_features_dim = cfg.dataset.hyperedge_features_dim
 
         num_parameters = sum(p.numel() for p in model.parameters())
         print(f"Total number of model parameters: {num_parameters / 1e6} Million")
@@ -152,7 +156,6 @@ class Trainer:
             last_step = self.step == self.cfg.training.num_steps
 
             step_start_time = time()
-            
             batch = next(self.train_iterator)
 
             loss_terms = self.run_step(batch)
@@ -280,6 +283,8 @@ class Trainer:
                 target_size=th.tensor(batch, device=self.device),
                 model=model,
                 sign_net=sign_net,
+                node_features_dim=self.node_features_dim,
+                hyperedge_features_dim=self.hyperedge_features_dim,
             )
         results["pred_hypergraphs"] = [pred_hypergraphs[i] for i in pred_perm]
         if self.device == "cuda":
@@ -306,10 +311,10 @@ class Trainer:
                     )
 
         # Sample plots
-        n = min(4, len(self.validation_hypergraphs)) // 2
-        fig, axs = plt.subplots(n, 2, figsize=(50, 50))
-        
         if self.cfg.training.visualization == 'hypergraph':
+            n = min(4, len(self.validation_hypergraphs)) // 2
+            fig, axs = plt.subplots(n, 2, figsize=(50, 50))
+            
             node_size=200
             edge_width=2
             node_color='skyblue'
@@ -359,16 +364,23 @@ class Trainer:
                 ax.title.set_text(f"N = {len(H.nodes)}")
                 ax.title.set_fontsize(40)
         elif self.cfg.training.visualization == 'mesh':
+            n = min(4, len(self.validation_hypergraphs)) // 2
+            fig = plt.figure(figsize=(50, 50))
+            axs = []
+            
+            for i in range(n):
+                for j in range(2):
+                    ax = fig.add_subplot(n, 2, i*2 + j + 1, projection='3d')
+                    axs.append(ax)
+            
+            axs = np.array(axs).reshape(n, 2)
+            
             for i in range(n * n):
                 ax = axs[i // n, i % n]
                 H = pred_hypergraphs[i]
                 
                 # Extract node positions from the 'feature' attribute
                 positions = np.array([H.nodes[node].feature for node in H.nodes])
-            
-                # Create a 3D plot
-                fig = plt.figure(figsize=(10, 10))
-                ax = fig.add_subplot(111, projection='3d')
             
                 # Plot nodes
                 ax.scatter(positions[:, 0], positions[:, 1], positions[:, 2], c='b', s=20)
@@ -390,9 +402,11 @@ class Trainer:
                 ax.set_zlabel('Z')
             
                 # Set axis limits
-                ax.set_xlim(positions[:, 0].min(), positions[:, 0].max())
-                ax.set_ylim(positions[:, 1].min(), positions[:, 1].max())
-                ax.set_zlim(positions[:, 2].min(), positions[:, 2].max())
+                pos_min = min(positions[:, 0].min(), positions[:, 1].min(), positions[:, 2].min())
+                pos_max = max(positions[:, 0].max(), positions[:, 1].max(), positions[:, 2].max())
+                ax.set_xlim(pos_min, pos_max)
+                ax.set_ylim(pos_min, pos_max)
+                ax.set_zlim(pos_min, pos_max)
                 
         fig.tight_layout()
         results["examples"] = fig

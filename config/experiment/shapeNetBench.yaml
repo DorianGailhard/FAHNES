@@ -12,7 +12,7 @@ dataset:
   hyperedge_features_dim: 0
 
 training:
-  batch_size: 10
+  batch_size: 20
 
 validation:
   batch_size: 10
