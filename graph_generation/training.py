@@ -380,21 +380,25 @@ class Trainer:
                 H = pred_hypergraphs[i]
                 
                 # Extract node positions from the 'feature' attribute
-                positions = np.array([H.nodes[node].feature for node in H.nodes])
+                positions = {node: H.nodes[node].feature for node in H.nodes}
+            
+                # Convert positions to a numpy array for plotting
+                pos_array = np.array(list(positions.values()))
             
                 # Plot nodes
-                ax.scatter(positions[:, 0], positions[:, 1], positions[:, 2], c='b', s=20)
+                ax.scatter(pos_array[:, 0], pos_array[:, 1], pos_array[:, 2], c='b', s=20)
             
                 # Plot filled edges (faces)
                 face_collection = []
                 for edge in H.edges:
                     edge_nodes = list(H.edges[edge])
                     if len(edge_nodes) > 2:  # Only plot edges with 3 or more nodes
-                        face = positions[edge_nodes]
+                        face = np.array([positions[node] for node in edge_nodes])
                         face_collection.append(face)
             
-                poly = Poly3DCollection(face_collection, alpha=0.25, facecolor='r', edgecolor='k')
-                ax.add_collection3d(poly)
+                if face_collection:
+                    poly = Poly3DCollection(face_collection, alpha=0.25, facecolor='r', edgecolor='k')
+                    ax.add_collection3d(poly)
             
                 # Set labels and title
                 ax.set_xlabel('X')
@@ -402,8 +406,8 @@ class Trainer:
                 ax.set_zlabel('Z')
             
                 # Set axis limits
-                pos_min = min(positions[:, 0].min(), positions[:, 1].min(), positions[:, 2].min())
-                pos_max = max(positions[:, 0].max(), positions[:, 1].max(), positions[:, 2].max())
+                pos_min = np.min(pos_array)
+                pos_max = np.max(pos_array)
                 ax.set_xlim(pos_min, pos_max)
                 ax.set_ylim(pos_min, pos_max)
                 ax.set_zlim(pos_min, pos_max)

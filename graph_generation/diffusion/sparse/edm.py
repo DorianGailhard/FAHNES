@@ -193,10 +193,11 @@ class EDM:
         edge_noise = self.edge_randn(edge_index) * t[edge_batch]
         
         if node_features is not None:
-            node_features_full = th.randn((node_type.shape[0],) + node_features.shape[1:], device=self.device)
+            node_features_full = th.zeros((node_type.shape[0],) + node_features.shape[1:], device=self.device)
             n_dims = node_features_full[node_type == 1].dim()
             t_expanded = t[batch[node_type == 1]].view(-1, *([1] * (n_dims - 1)))
-            node_features_full[node_type == 1] = node_features_full[node_type == 1] * t_expanded + node_features
+            node_features_full[node_type == 1] = node_features
+            node_features_full[node_type == 0] = th.randn_like(node_features_full[node_type == 0]) * t_expanded
 
         # make prediction
         node_pred, edge_node_pred, edge_pred, node_features_nodes_pred, node_features_edge_nodes_pred = self.model_wrapper(
