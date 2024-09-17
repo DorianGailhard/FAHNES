@@ -28,14 +28,20 @@ class Reduction(ABC):
         self.clique_adj = clique_adj
         self.n = clique_adj.shape[0]
 
-        self.node_features = node_features
+        if node_features is not None:
+            self.node_features = node_features.astype(np.float64)
+        else:
+            self.node_features = None
         
         if node_cluster_size is not None:
             self.node_cluster_size = node_cluster_size
         else:
             self.node_cluster_size = np.ones(self.n)
         
-        self.hyperedge_features = hyperedge_features
+        if hyperedge_features is not None:
+            self.hyperedge_features = hyperedge_features.astype(np.float64)
+        else:
+            self.hyperedge_features = None
         
         if edge_cluster_size is not None:
             self.edge_cluster_size = edge_cluster_size

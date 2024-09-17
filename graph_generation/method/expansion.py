@@ -53,7 +53,7 @@ class Expansion(Method):
         hyperedge_features = None
         
         if node_features_dim:
-            node_features = th.randn((num_hypergraphs,) + (node_features_dim if isinstance(node_features_dim, tuple) else (node_features_dim,)), device=self.device)
+            node_features = th.randn((num_hypergraphs,) + (node_features_dim if isinstance(node_features_dim, tuple) else (node_features_dim,)), device=self.device, dtype=th.float64)
             
         if hyperedge_features_dim:
             hyperedge_features = th.randn((num_hypergraphs,) + (hyperedge_features_dim if isinstance(hyperedge_features_dim, tuple) else (hyperedge_features_dim,)), device=self.device)
@@ -312,15 +312,17 @@ class Expansion(Method):
         red_frac = 1 - size / expanded_size
 
         # loss
-        node_loss, edge_node_loss, edge_loss, node_features_loss, hyperedge_features_loss = self.diffusion.get_loss(
+        node_loss, edge_node_loss, edge_loss, nodes_node_features_loss, edge_nodes_node_features_loss, hyperedge_features_loss = self.diffusion.get_loss(
             edge_index=augmented_edge_index,
             batch=batch.batch,
             node_type=batch.node_type,
             node_attr=node_attr,
             edge_node_attr=edge_node_attr,
             edge_attr=augmented_edge_attr,
-            node_features=node_features,
-            hyperedge_features=hyperedge_features,
+            node_features_expanded=node_features,
+            node_features_real=batch.node_features if node_features is not None else None,
+            hyperedge_features_expanded=hyperedge_features,
+            hyperedge_features_real=batch.hyperedge_features if hyperedge_features is not None else None,
             model=model,
             model_kwargs={
                 "node_emb": node_emb,
@@ -344,9 +346,9 @@ class Expansion(Method):
         }
         
         if hasattr(batch, 'node_features'):
-            node_features_loss = node_features_loss[batch.reduction_level[batch.batch[batch.node_type == 1]] > 0].mean()
-            loss += node_features_loss
-            res["node_features_loss"] = node_features_loss.item()
+            nodes_node_features_loss = nodes_node_features_loss[batch.reduction_level[batch.batch[batch.node_type == 1]] > 0].mean()
+            loss += nodes_node_features_loss
+            res["node_features_loss"] = nodes_node_features_loss.item()
         
         if hasattr(batch, 'hyperedge_features'):
             hyperedge_features_loss = hyperedge_features_loss[batch.reduction_level[batch.batch[batch.node_type == 0]] > 0].mean()
@@ -354,6 +356,10 @@ class Expansion(Method):
             res["hyperedge_features_loss"] = hyperedge_features_loss.item()
             
         res["loss"] = loss.item()
+        
+        if hasattr(batch, 'node_features'):
+            edge_nodes_node_features_loss = edge_nodes_node_features_loss[batch.reduction_level[batch.batch[batch.node_type == 0]] > 0].mean()
+            loss += edge_nodes_node_features_loss
             
         return loss, res
 

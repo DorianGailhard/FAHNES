@@ -174,7 +174,7 @@ class EDM:
         self.model_wrapper.to(device)
         return self
 
-    def get_loss(self, edge_index, batch, node_type, node_attr, edge_node_attr, edge_attr, node_features, hyperedge_features, model, model_kwargs):
+    def get_loss(self, edge_index, batch, node_type, node_attr, edge_node_attr, edge_attr, node_features_expanded, node_features_real, hyperedge_features_expanded, hyperedge_features_real, model, model_kwargs):
         # rescale attributes to {-1, 1}
         node_attr = node_attr.float() * 2 - 1
         edge_node_attr = edge_node_attr.float() - 1
@@ -192,12 +192,41 @@ class EDM:
         edge_node_noise = th.randn_like(edge_node_attr) * t[batch[node_type == 0]]
         edge_noise = self.edge_randn(edge_index) * t[edge_batch]
         
-        if node_features is not None:
-            node_features_full = th.zeros((node_type.shape[0],) + node_features.shape[1:], device=self.device)
+        if node_features_expanded is not None:
+            node_features_full = th.zeros((node_type.shape[0],) + node_features_expanded.shape[1:], device=self.device)
             n_dims = node_features_full[node_type == 1].dim()
             t_expanded = t[batch[node_type == 1]].view(-1, *([1] * (n_dims - 1)))
-            node_features_full[node_type == 1] = node_features
-            node_features_full[node_type == 0] = th.randn_like(node_features_full[node_type == 0]) * t_expanded
+            node_features_full[node_type == 1] = node_features_expanded * t_expanded + node_features_real * (1 - t_expanded)
+            
+            # For hyperedges, set features as average of the nodes it contains
+            # Get indices of the nodes forming edges from edge_index
+            src_nodes = edge_index[0]
+            dst_nodes = edge_index[1]
+            
+            # Initialize neighbor sum and count to accumulate features and number of neighbors
+            neighbor_sum = th.zeros_like(node_features_full)
+            neighbor_count = th.zeros(node_type.shape[0], device=self.device)
+            
+            # Accumulate the features of the neighbors
+            neighbor_sum.index_add_(0, src_nodes, node_features_full[dst_nodes])
+            neighbor_sum.index_add_(0, dst_nodes, node_features_full[src_nodes])
+            
+            # Accumulate the count of neighbors
+            neighbor_count.index_add_(0, src_nodes, th.ones_like(src_nodes, dtype=neighbor_count.dtype))
+            neighbor_count.index_add_(0, dst_nodes, th.ones_like(dst_nodes, dtype=neighbor_count.dtype))
+            
+            # Avoid division by zero (in case a node has no neighbors)
+            neighbor_count = neighbor_count.clamp(min=1)
+            
+            # Compute the average of neighbor features
+            neighbor_avg = neighbor_sum / neighbor_count.view(-1, *([1] * (n_dims - 1)))
+            
+            # Incorporate both random noise and average of neighbors' features
+            t_expanded = t[batch[node_type == 0]].view(-1, *([1] * (n_dims - 1)))
+            node_features_full[node_type == 0] = (
+                th.randn_like(node_features_full[node_type == 0]) * t_expanded + 
+                neighbor_avg[node_type == 0]
+            )
 
         # make prediction
         node_pred, edge_node_pred, edge_pred, node_features_nodes_pred, node_features_edge_nodes_pred = self.model_wrapper(
@@ -222,14 +251,17 @@ class EDM:
         edge_node_loss = weight[batch[node_type == 0]] * (edge_node_pred - edge_node_attr) ** 2
         edge_loss = weight[edge_batch] * (edge_pred - edge_attr) ** 2
         
-        node_features_loss = None
+        nodes_node_features_loss = None
+        edge_nodes_node_features_loss = None
         
-        if node_features is not None:
-            n_dims = node_features.dim()
-            weight_expanded = weight[batch[node_type == 1]].view(-1, *([1] * (n_dims - 1)))
-            node_features_loss = weight_expanded * (node_features - node_features_nodes_pred)**2
-            
-        return node_loss, edge_node_loss, edge_loss, node_features_loss, None
+        if node_features_expanded is not None:
+            n_dims = node_features_expanded.dim()
+            weight_expanded_type_one = weight[batch[node_type == 1]].view(-1, *([1] * (n_dims - 1)))
+            weight_expanded_type_zero = weight[batch[node_type == 0]].view(-1, *([1] * (n_dims - 1)))
+            nodes_node_features_loss = weight_expanded_type_one * (node_features_real - node_features_nodes_pred)**2
+            edge_nodes_node_features_loss = weight_expanded_type_zero * (node_features_edge_nodes_pred - neighbor_avg[node_type == 0])**2
+           
+        return node_loss, edge_node_loss, edge_loss, nodes_node_features_loss, edge_nodes_node_features_loss, None
 
     @th.no_grad()
     def sample(self, edge_index, node_type, node_features, hyperedge_features, batch, model, model_kwargs):
@@ -260,7 +292,9 @@ class EDM:
         node_features_next = None
         
         if node_features is not None:
-            node_features_next = th.randn((node_type.shape[0],) + node_features.shape[1:], device=self.device, dtype=th.float64) * t_steps[0]
+            node_features_next = th.zeros((node_type.shape[0],) + node_features.shape[1:], device=self.device, dtype=th.float64)
+            node_features_next[node_type == 1] = node_features
+            node_features_next[node_type == 0] = th.randn_like(node_features_next[node_type == 0]) * t_steps[0]
             node_features_pred = th.zeros_like(node_features_next)
         
         # sample loop
