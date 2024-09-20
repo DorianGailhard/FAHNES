@@ -9,6 +9,8 @@ from torch_geometric.typing import SparseTensor
 
 from ..reduction import ReductionFactory
 
+import pickle
+import sys
 
 class RandRedDataset(IterableDataset, ABC):
     def __init__(self, hypergraphs, red_factory: ReductionFactory, spectrum_extractor):
@@ -21,7 +23,7 @@ class RandRedDataset(IterableDataset, ABC):
     def get_random_reduction_sequence(self, reduction_level_zero, rng):
         data = []
         red = reduction_level_zero
-        print(red.n)
+        
         while True:
             reduced_hypergraph = red.get_reduced_hypergraph(rng)
             
@@ -53,6 +55,7 @@ class RandRedDataset(IterableDataset, ABC):
             )
             if red.n <= 1:
                 break
+                
             red = reduced_hypergraph
 
         return data

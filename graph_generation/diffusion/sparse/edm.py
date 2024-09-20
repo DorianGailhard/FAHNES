@@ -194,8 +194,10 @@ class EDM:
         
         if node_features_expanded is not None:
             node_features_full = th.zeros((node_type.shape[0],) + node_features_expanded.shape[1:], device=self.device)
+            node_features_full[node_type == 0] = th.randn_like(node_features_full[node_type == 0])
+            
             n_dims = node_features_full[node_type == 1].dim()
-            t_expanded = t[batch[node_type == 1]].view(-1, *([1] * (n_dims - 1)))
+            t_expanded = (t[batch[node_type == 1]]/(1 + t[batch[node_type == 1]])).view(-1, *([1] * (n_dims - 1)))
             node_features_full[node_type == 1] = node_features_expanded * t_expanded + node_features_real * (1 - t_expanded)
             
             # For hyperedges, set features as average of the nodes it contains
@@ -224,7 +226,7 @@ class EDM:
             # Incorporate both random noise and average of neighbors' features
             t_expanded = t[batch[node_type == 0]].view(-1, *([1] * (n_dims - 1)))
             node_features_full[node_type == 0] = (
-                th.randn_like(node_features_full[node_type == 0]) * t_expanded + 
+                node_features_full[node_type == 0] * t_expanded + 
                 neighbor_avg[node_type == 0]
             )
 
@@ -325,9 +327,10 @@ class EDM:
             
             if node_features is not None:
                 node_features_cur = node_features_next
-                node_features_hat = node_features_cur + (
-                    t_hat**2 - t_cur**2
-                ).sqrt() * self.S_noise * th.randn_like(node_features_cur)
+                node_features_hat = node_features_cur
+                node_features_hat[node_type == 0] = node_features_hat[node_type == 0] + (
+                   t_hat**2 - t_cur**2
+               ).sqrt() * self.S_noise * th.randn_like(node_features_cur[node_type == 0])
 
             # Euler step
             node_attr_pred, edge_node_attr_pred, edge_attr_pred, node_features_nodes_pred, node_features_edge_nodes_pred = self.model_wrapper(
