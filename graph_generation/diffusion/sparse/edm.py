@@ -194,11 +194,10 @@ class EDM:
         
         if node_features_expanded is not None:
             node_features_full = th.zeros((node_type.shape[0],) + node_features_expanded.shape[1:], device=self.device)
-            node_features_full[node_type == 0] = th.randn_like(node_features_full[node_type == 0])
             
             n_dims = node_features_full[node_type == 1].dim()
-            t_expanded = (t[batch[node_type == 1]]/(1 + t[batch[node_type == 1]])).view(-1, *([1] * (n_dims - 1)))
-            node_features_full[node_type == 1] = node_features_expanded * t_expanded + node_features_real * (1 - t_expanded)
+            t_expanded = t[batch[node_type == 1]].view(-1, *([1] * (n_dims - 1)))
+            node_features_full[node_type == 1] = node_features_expanded * t_expanded + node_features_real
             
             # For hyperedges, set features as average of the nodes it contains
             # Get indices of the nodes forming edges from edge_index
@@ -226,7 +225,7 @@ class EDM:
             # Incorporate both random noise and average of neighbors' features
             t_expanded = t[batch[node_type == 0]].view(-1, *([1] * (n_dims - 1)))
             node_features_full[node_type == 0] = (
-                node_features_full[node_type == 0] * t_expanded + 
+                th.randn_like(node_features_full[node_type == 0]) * t_expanded + 
                 neighbor_avg[node_type == 0]
             )
 
@@ -259,8 +258,9 @@ class EDM:
         if node_features_expanded is not None:
             n_dims = node_features_expanded.dim()
             weight_expanded_type_one = weight[batch[node_type == 1]].view(-1, *([1] * (n_dims - 1)))
-            weight_expanded_type_zero = weight[batch[node_type == 0]].view(-1, *([1] * (n_dims - 1)))
             nodes_node_features_loss = weight_expanded_type_one * (node_features_real - node_features_nodes_pred)**2
+            
+            weight_expanded_type_zero = weight[batch[node_type == 0]].view(-1, *([1] * (n_dims - 1)))
             edge_nodes_node_features_loss = weight_expanded_type_zero * (node_features_edge_nodes_pred - neighbor_avg[node_type == 0])**2
            
         return node_loss, edge_node_loss, edge_loss, nodes_node_features_loss, edge_nodes_node_features_loss, None
@@ -295,9 +295,8 @@ class EDM:
         
         if node_features is not None:
             node_features_next = th.zeros((node_type.shape[0],) + node_features.shape[1:], device=self.device, dtype=th.float64)
-            node_features_next[node_type == 1] = node_features
+            node_features_next[node_type == 1] = node_features * t_steps[0]
             node_features_next[node_type == 0] = th.randn_like(node_features_next[node_type == 0]) * t_steps[0]
-            node_features_pred = th.zeros_like(node_features_next)
         
         # sample loop
         for i, (t_cur, t_next) in enumerate(zip(t_steps[:-1], t_steps[1:])):
@@ -330,7 +329,7 @@ class EDM:
                 node_features_hat = node_features_cur
                 node_features_hat[node_type == 0] = node_features_hat[node_type == 0] + (
                    t_hat**2 - t_cur**2
-               ).sqrt() * self.S_noise * th.randn_like(node_features_cur[node_type == 0])
+               ).sqrt() * self.S_noise * th.randn_like(node_features_hat[node_type == 0])
 
             # Euler step
             node_attr_pred, edge_node_attr_pred, edge_attr_pred, node_features_nodes_pred, node_features_edge_nodes_pred = self.model_wrapper(
@@ -355,12 +354,11 @@ class EDM:
             edge_attr_next = edge_attr_hat + (t_next - t_hat) * edge_attr_d
             
             if node_features is not None:
-                node_features_pred = th.zeros_like(node_features_hat)
-                node_features_pred[node_type == 1] = node_features_nodes_pred
-                node_features_pred[node_type == 0] = node_features_edge_nodes_pred
+                node_features_d_0 = (node_features_hat[node_type == 0] - node_features_edge_nodes_pred) / t_hat
+                node_features_next[node_type == 0] = node_features_hat[node_type == 0] + (t_next - t_hat) * node_features_d_0
                 
-                node_features_d = (node_features_hat - node_features_pred) / t_hat
-                node_features_next = node_features_hat + (t_next - t_hat) * node_features_d
+                node_features_d_1 = (node_features_hat[node_type == 1] - node_features_nodes_pred) / t_hat
+                node_features_next[node_type == 1] = node_features_hat[node_type == 1] + (t_next - t_hat) * node_features_d_1
             
             # 2nd order correction
             if i < self.num_steps - 1:
@@ -392,12 +390,14 @@ class EDM:
                 )
                 
                 if node_features is not None:
-                    node_features_pred[node_type == 1] = node_features_nodes_pred
-                    node_features_pred[node_type == 0] = node_features_edge_nodes_pred
+                    node_features_d_prime_0 = (node_features_next[node_type == 0] - node_features_edge_nodes_pred) / t_next
+                    node_features_next[node_type == 0] = node_features_hat[node_type == 0] + (t_next - t_hat) * (
+                        0.5 * node_features_d_0 + 0.5 * node_features_d_prime_0
+                    )
                     
-                    node_features_d_prime = (node_features_next - node_features_pred) / t_next
-                    node_features_next = node_features_hat + (t_next - t_hat) * (
-                        0.5 * node_features_d + 0.5 * node_features_d_prime
+                    node_features_d_prime_1 = (node_features_next[node_type == 1] - node_features_nodes_pred) / t_next
+                    node_features_next[node_type == 1] = node_features_hat[node_type == 1] + (t_next - t_hat) * (
+                        0.5 * node_features_d_1 + 0.5 * node_features_d_prime_1
                     )
 
         # rescale attributes to {0, 1} and {0, 2}

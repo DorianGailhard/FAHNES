@@ -1,1 +1,1 @@
-from .edm import EDM
+from .flow_matching import CFM

@@ -42,6 +42,7 @@ class SparsePPGN(Module):
         else:
             self.node_features = -1 # coding for no features
             self.node_features_dim = 0
+            node_emb_features = 0
 
         # Embedding layers
         self.node_emb_layer = Linear(expansion_node_in_features*(1+self_conditioning), expansion_emb_features)

@@ -7,6 +7,7 @@ import numpy as np
 
 from collections import Counter
 from scipy.stats import wasserstein_distance
+from scipy.spatial.distance import cdist
 
 from util.eval_helper import (
     spectral_stats,
@@ -209,3 +210,31 @@ class HyperedgeFeaturesWasserstein(Metric):
         reference_features = [H.edges[e].feature for H in reference_hypergraphs for e in H.edges]
         
         return wasserstein_distance(predicted_features, reference_features)
+    
+
+class ChamferDistance:
+    def __str__(self):
+        return "ChamferDistance"
+
+    def __call__(self, reference_hypergraphs, predicted_hypergraphs, train_hypergraphs=None):
+        predicted_features = np.array([H.nodes[n].feature for H in predicted_hypergraphs for n in H.nodes])
+        reference_features = np.array([H.nodes[n].feature for H in reference_hypergraphs for n in H.nodes])
+
+        return self.chamfer_distance(predicted_features, reference_features)
+
+    def chamfer_distance(self, X, Y):
+        X = np.asarray(X)
+        Y = np.asarray(Y)
+
+        if X.shape[0] == 0 or Y.shape[0] == 0:
+            return np.inf
+
+        # Compute pairwise distances
+        dists = cdist(X, Y)
+
+        # Compute Chamfer distance
+        min_dist_x = np.min(dists, axis=1)
+        min_dist_y = np.min(dists, axis=0)
+        chamfer_dist = np.mean(min_dist_x) + np.mean(min_dist_y)
+
+        return chamfer_dist

@@ -109,6 +109,11 @@ def get_expansion_items(cfg: DictConfig, train_hypergraphs):
             self_conditioning=cfg.diffusion.self_conditioning,
             num_steps=cfg.diffusion.num_steps,
         )
+    elif cfg.diffusion.name == "cfm":
+        diffusion = gg.diffusion.sparse.CFM(
+            self_conditioning=cfg.diffusion.self_conditioning,
+            num_steps=cfg.diffusion.num_steps,
+        )
     else:
         raise ValueError(f"Unknown diffusion name: {cfg.diffusion.name}")
 
@@ -190,6 +195,7 @@ def main(cfg: DictConfig):
         gg.metrics.CentralityHarmonic(),
         gg.metrics.Uniqueness(),
         gg.metrics.Novelty(),
+        gg.metrics.ChamferDistance()
     ]
     
     """if cfg.dataset.node_features_dim != 0:

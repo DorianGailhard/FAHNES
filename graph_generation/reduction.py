@@ -128,7 +128,7 @@ class Reduction(ABC):
     
             # Step 4: Reshape summed weights for broadcasting and compute weighted average features
             summed_weights_reshaped = node_cluster_size.reshape((-1,) + (1,) * (summed_weighted_features.ndim - 1))
-            node_features = summed_weighted_features / summed_weights_reshaped
+            node_features = summed_weighted_features / summed_weights_reshaped # + np.random.rand(*summed_weighted_features.shape) * np.sqrt(1/summed_weighted_features.shape[0])
             
             
         edge_cluster_size = None
@@ -153,7 +153,7 @@ class Reduction(ABC):
     
             # Step 4: Reshape summed weights for broadcasting and compute weighted average features
             summed_weights_reshaped = edge_cluster_size.reshape((-1,) + (1,) * (summed_weighted_features.ndim - 1))
-            hyperedge_features = summed_weighted_features / summed_weights_reshaped
+            hyperedge_features = summed_weighted_features / summed_weights_reshaped #+ np.random.rand(*summed_weighted_features.shape) * np.sqrt( (1/summed_weighted_features.shape[0]) * (1/2)**(summed_weighted_features.shape[0] + 1) )
         
         
         return self.__class__(

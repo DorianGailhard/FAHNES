@@ -53,7 +53,7 @@ class Expansion(Method):
         hyperedge_features = None
         
         if node_features_dim:
-            node_features = th.randn((num_hypergraphs,) + (node_features_dim if isinstance(node_features_dim, tuple) else (node_features_dim,)), device=self.device, dtype=th.float64)
+            node_features = th.zeros((num_hypergraphs,) + (node_features_dim if isinstance(node_features_dim, tuple) else (node_features_dim,)), device=self.device, dtype=th.float32)
             
         if hyperedge_features_dim:
             hyperedge_features = th.randn((num_hypergraphs,) + (hyperedge_features_dim if isinstance(hyperedge_features_dim, tuple) else (hyperedge_features_dim,)), device=self.device)
@@ -225,6 +225,10 @@ class Expansion(Method):
                 "target_size": target_size.float(),
             },
         )
+        
+        print(f"node : {node_pred}")
+        print(f"edge_node : {edge_node_pred}")
+        print(f"edge : {augmented_edge_pred}")
 
         # get node attributes
         if self.deterministic_expansion:

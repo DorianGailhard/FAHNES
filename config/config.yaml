@@ -1,7 +1,7 @@
 defaults:
   - _self_
   - dataset: shapeNetBench
-  - diffusion: edm
+  - diffusion: cfm
   - method: expansion
 
 dataset:
@@ -30,14 +30,14 @@ spectral:
   normalized_laplacian: True
 
 training:
-  batch_size: 5
+  batch_size: 64
   lr: 1e-4
   num_steps: -1 # infinite
   max_num_workers: 10
   log_interval: 100
   save_checkpoint: True
   resume: False # if True, resume from last checkpoint, if number, resume from that step
-  visualization: mesh
+  visualization: hypergraph
 
 validation:
   batch_size: null
