@@ -225,10 +225,6 @@ class Expansion(Method):
                 "target_size": target_size.float(),
             },
         )
-        
-        print(f"node : {node_pred}")
-        print(f"edge_node : {edge_node_pred}")
-        print(f"edge : {augmented_edge_pred}")
 
         # get node attributes
         if self.deterministic_expansion:

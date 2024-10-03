@@ -107,7 +107,7 @@ class CFMModel(Module):
 
 class CFM:
     """Conditional Flow Matching Framework"""
-    sigma_min = 0.001
+    sigma_min = 0.003
     
     def __init__(self, self_conditioning, num_steps):
         self.model_wrapper = CFMModel(self_conditioning)
@@ -200,16 +200,16 @@ class CFM:
         edge_node_attr_pred = edge_node_attr_pred.float().squeeze(1)
         edge_attr_pred = edge_attr_pred.float().squeeze(1)
 
-        node_loss = (node_attr_pred - (node_attr - node_noise)) ** 2
-        edge_node_loss = (edge_node_attr_pred - (edge_node_attr - edge_node_noise)) ** 2
-        edge_loss = (edge_attr_pred - (edge_attr - edge_noise)) ** 2
+        node_loss = (node_attr_pred - (node_attr - (1-self.sigma_min)*node_noise)) ** 2
+        edge_node_loss = (edge_node_attr_pred - (edge_node_attr - (1-self.sigma_min)*edge_node_noise)) ** 2
+        edge_loss = (edge_attr_pred - (edge_attr - (1-self.sigma_min)*edge_noise)) ** 2
         
         nodes_node_features_loss = None
         edge_nodes_node_features_loss = None
         
         if node_features_expanded is not None:
-            nodes_node_features_loss = (node_features_nodes_pred - (node_features_full[node_type == 1] - node_features_start[node_type == 1]))**2
-            edge_nodes_node_features_loss = (node_features_edge_nodes_pred - (node_features_full[node_type == 0] - node_features_start[node_type == 0]))**2
+            nodes_node_features_loss = (node_features_nodes_pred - (node_features_full[node_type == 1] - (1-self.sigma_min)*node_features_start[node_type == 1]))**2
+            edge_nodes_node_features_loss = (node_features_edge_nodes_pred - (node_features_full[node_type == 0] - (1-self.sigma_min)*node_features_start[node_type == 0]))**2
             
         return node_loss, edge_node_loss, edge_loss, nodes_node_features_loss, edge_nodes_node_features_loss, None
 
@@ -225,6 +225,7 @@ class CFM:
         edge_attr_next = self.edge_randn(edge_index, dtype=th.float32)[:, None]
 
         node_features_next = None
+        node_features_hat = None
         if node_features is not None:
             node_features_next = th.zeros((node_type.shape[0],) + node_features.shape[1:], device=self.device, dtype=th.float32)
             node_features_next[node_type == 1] = node_features
@@ -233,7 +234,7 @@ class CFM:
         # Flow matching sampling: Integrate learned flow model over time (0 to 1)
         t_steps = th.linspace(0, 1, steps=self.num_steps, device=self.device)
 
-        for t_cur in t_steps:
+        for i in range(len(t_steps)):
             # Forward pass through the model to get flow direction
             node_attr_pred, edge_node_attr_pred, edge_attr_pred, node_features_nodes_pred, node_features_edge_nodes_pred = self.model_wrapper(
                 edge_index=edge_index,
@@ -243,20 +244,56 @@ class CFM:
                 edge_node_attr=edge_node_attr_next,
                 edge_attr=edge_attr_next,
                 node_features=node_features_next,
-                t=t_cur.repeat(num_graphs),
+                t=t_steps[i].repeat(num_graphs),
                 model=model,
                 model_kwargs=model_kwargs,
             )
             
             # Euler step: Integrate the flow over time to update the attributes and features
             dt = t_steps[1] - t_steps[0]
-            node_attr_next += dt * node_attr_pred
-            edge_node_attr_next += dt * edge_node_attr_pred
-            edge_attr_next += dt * edge_attr_pred
+            node_attr_hat = node_attr_next + dt * node_attr_pred
+            edge_node_attr_hat = edge_node_attr_next + dt * edge_node_attr_pred
+            edge_attr_hat = edge_attr_next + dt * edge_attr_pred
             
             if node_features is not None:
-                node_features_next[node_type == 1] += dt * node_features_nodes_pred
-                node_features_next[node_type == 0] += dt * node_features_edge_nodes_pred
+                node_features_hat = node_features_next
+                node_features_hat[node_type == 1] += dt * node_features_nodes_pred
+                node_features_hat[node_type == 0] += dt * node_features_edge_nodes_pred
+                
+            # 2nd order correction
+            if i < self.num_steps - 1:
+                node_attr_pred_prime, edge_node_attr_pred_prime, edge_attr_pred_prime, node_features_nodes_pred_prime, node_features_edge_nodes_pred_prime = self.model_wrapper(
+                    edge_index=edge_index,
+                    batch=batch,
+                    node_type=node_type,
+                    node_attr=node_attr_hat,
+                    edge_node_attr=edge_node_attr_hat,
+                    edge_attr=edge_attr_hat,
+                    node_features=node_features_hat,
+                    t=t_steps[i+1].repeat(num_graphs),
+                    model=model,
+                    model_kwargs=model_kwargs,
+                    node_attr_self_cond=node_attr_pred,
+                    edge_attr_self_cond=edge_attr_pred,
+                )
+                node_attr_next += dt * (
+                    0.5 * node_attr_pred + 0.5 * node_attr_pred_prime
+                )
+                edge_node_attr_next += dt * (
+                    0.5 * edge_node_attr_pred + 0.5 * edge_node_attr_pred_prime
+                )
+                edge_attr_next += dt * (
+                    0.5 * edge_attr_pred + 0.5 * edge_attr_pred_prime
+                )
+                
+                if node_features is not None:
+                    node_features_next[node_type == 0] += dt * (
+                        0.5 * node_features_edge_nodes_pred + 0.5 * node_features_edge_nodes_pred_prime
+                    )
+                    
+                    node_features_next[node_type == 1] += dt * (
+                        0.5 * node_features_nodes_pred + 0.5 * node_features_nodes_pred_prime
+                    )
 
         # rescale attributes to {0, 1} and {0, 2}
         node_attr_out = (node_attr_next + 1) / 2

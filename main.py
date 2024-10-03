@@ -195,8 +195,11 @@ def main(cfg: DictConfig):
         gg.metrics.CentralityHarmonic(),
         gg.metrics.Uniqueness(),
         gg.metrics.Novelty(),
-        gg.metrics.ChamferDistance()
     ]
+    
+    if "shapeNet" in cfg.dataset.name:
+        validation_metrics += [gg.metrics.ChamferDistance(),
+        ]
     
     """if cfg.dataset.node_features_dim != 0:
         validation_metrics += [gg.metrics.NodeFeaturesWasserstein()]

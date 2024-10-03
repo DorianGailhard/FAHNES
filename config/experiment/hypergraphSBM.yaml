@@ -1,0 +1,21 @@
+# @package _global_
+defaults:
+  - override /dataset: file
+  - override /diffusion: cfm
+  - _self_
+
+name: hypergraphSBM
+
+dataset:
+  name: hypergraphSBM
+  node_features_dim: 0
+  hyperedge_features_dim: 0
+
+training:
+  batch_size: 32
+
+validation:
+  batch_size: 20
+
+spectral:
+  num_features: 2
