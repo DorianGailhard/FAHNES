@@ -37,7 +37,7 @@ training:
   log_interval: 100
   save_checkpoint: True
   resume: False # if True, resume from last checkpoint, if number, resume from that step
-  visualization: hypergraph
+  visualization: mesh
 
 validation:
   batch_size: null
@@ -52,8 +52,8 @@ model:
   node_emb_features: 32
   hyperedge_emb_features: 32
   expansion_emb_features: 32
-  hidden_features: 256
-  ppgn_features: 128
+  hidden_features: 512
+  ppgn_features: 256
   num_layers: 10
   dropout: 0.1
 

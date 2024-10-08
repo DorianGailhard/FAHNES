@@ -339,7 +339,13 @@ class Reduction(ABC):
         W = self.clique_adj[nodes, :][:, nodes]
         L = np.diag(2 * self.node_degree[nodes] - W @ ones) - W
         B = (np.eye(nc) - np.outer(ones, ones) / nc) @ self.A[nodes, :]
-        return np.linalg.norm(B.T @ L @ B) / (nc - 1)
+        
+        if self.node_features is not None:
+            distance_features = np.sum((self.node_features[nodes[0]] - self.node_features[nodes[1]])**2)
+            
+            return distance_features #+ np.linalg.norm(B.T @ L @ B) / (nc - 1)
+        else:
+            return np.linalg.norm(B.T @ L @ B) / (nc - 1)
 
 
 class NeighborhoodReduction(Reduction):
@@ -370,7 +376,13 @@ class EdgeReduction(Reduction):
             [[2 * self.node_degree[u] - w, -w], [-w, 2 * self.node_degree[v] - w]]
         )
         B = self.A[edge, :]
-        return np.linalg.norm(B.T @ L @ B)
+        
+        if self.node_features is not None:
+            distance_features = np.sum((self.node_features[edge[0]] - self.node_features[edge[1]])**2)
+            
+            return distance_features + np.linalg.norm(B.T @ L @ B)
+        else:
+            return np.linalg.norm(B.T @ L @ B)
 
 
 class ReductionFactory:

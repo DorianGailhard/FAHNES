@@ -9,6 +9,9 @@ import numpy as np
 from .method import Method
 
 
+import pickle
+
+
 class Expansion(Method):
     """Hypergraph generation method generating graphs by local expansion."""
 
@@ -57,7 +60,7 @@ class Expansion(Method):
             
         if hyperedge_features_dim:
             hyperedge_features = th.randn((num_hypergraphs,) + (hyperedge_features_dim if isinstance(hyperedge_features_dim, tuple) else (hyperedge_features_dim,)), device=self.device)
-        
+        i = 0
         while node_type.sum() < target_size.sum():
             adj, batch, node_expansion, node_type, node_features, hyperedge_features = self.expand(
                 adj,
@@ -70,6 +73,26 @@ class Expansion(Method):
                 model=model,
                 sign_net=sign_net,
             )
+            
+            
+            
+            """adjs = []
+            features = []
+            num_nodes = []
+            
+            adjs.append(adj.to_dense().cpu().numpy())
+            features.append(node_features.cpu().numpy())
+            num_nodes.append(th.sum(node_type).item())
+                
+            data = {"adj" : adjs, "features": features, "num_nodes": num_nodes}
+            
+            with open(f'data_{i}.pkl', 'wb') as file:
+                pickle.dump(data, file)
+            
+            i+= 1"""
+                
+            
+            
             if node_expansion.max() <= 1:
                 break
                 
@@ -297,7 +320,8 @@ class Expansion(Method):
         node_features = None
         hyperedge_features = None
         if hasattr(batch, 'node_features'):
-            node_features = batch.node_features_reduced[th.repeat_interleave(
+            node_features_reduced_noised = batch.node_features_reduced + 0.1*th.randn_like(batch.node_features_reduced)
+            node_features = node_features_reduced_noised[th.repeat_interleave(
                 th.arange(0, batch.node_features_reduced.size(0), device=self.device), expansion_numbers[batch.node_type_reduced == 1]
             )]
             

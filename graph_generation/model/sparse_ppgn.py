@@ -205,50 +205,70 @@ class SparsePPGN(Module):
         # construct triangle_index
         # the indexed elements are the edges of the triangles (including self-loops)
         # for each triangle (a, b, c) the message x[a] * x[b] is sent to x[c]
-        # a = (s,u), b = (u,v), c = (v,t)
-        # add self-loops
-        self_loop_index = th.arange(node_attr.size(0) + edge_node_attr.size(0), device=node_attr.device)[
-            None, :
-        ].expand(2, -1)
-            
-        edge_index_ext = th.cat([self_loop_index, edge_index], dim=1)
-        x = th.zeros(x_node.size(0) + x_edge_node.size(0), x_node.size(1), device=x_node.device)
         
-        # Change the indices so they correspond to the indices of the graph
+        # Add self-loops
+        self_loop_index = th.arange(node_attr.size(0) + edge_node_attr.size(0), device=node_attr.device)[None, :].expand(2, -1)
+        edge_index_ext = th.cat([self_loop_index, edge_index], dim=1)
+        
+        x = th.zeros(x_node.size(0) + x_edge_node.size(0), x_node.size(1), device=x_node.device)
         x[node_type == 0] = x_edge_node
         x[node_type == 1] = x_node
         x = th.cat([x, x_edge], dim=0)
-
+        
+        # Total number of nodes + edge-nodes
         n = node_attr.size(0) + edge_node_attr.size(0)
+        
+        # Map edges to unique edge IDs
+        #edge_id = edge_index_ext[0] * n + edge_index_ext[1]
+        #edge_id_to_edge_num = SparseTensor(row=edge_index_ext[0], col=edge_index_ext[1], value=edge_id, sparse_sizes=(n, n))
         edge_id = edge_index_ext[0] * n + edge_index_ext[1]
         edge_id_to_edge_num = th.full((n * n,), -1, dtype=th.long, device=x.device)
         edge_id_to_edge_num[edge_id] = th.arange(edge_id.size(0), device=x.device)
-
-        rowptr, col = SparseTensor.from_edge_index(
-            edge_index_ext, sparse_sizes=(n, n)
-        ).csr()[:2]
-        out_degrees = rowptr[1:] - rowptr[:-1]
-        two_hop = edge_index_ext.repeat_interleave(
-            out_degrees[edge_index_ext[1]], dim=1
-        )
-        offsets = th.arange(two_hop.size(1), device=x.device) - (
-            (
-                th.cat(
-                    [
-                        th.zeros_like(out_degrees[0])[None],
-                        out_degrees[edge_index_ext[1, :-1]],
-                    ]
-                )
-            ).cumsum(0)
-        ).repeat_interleave(out_degrees[edge_index_ext[1]], dim=0)
-        two_hop = th.cat([two_hop, col[rowptr[two_hop[1]] + offsets][None]])
-        triangles = two_hop[:, edge_id_to_edge_num[two_hop[0] * n + two_hop[2]] >= 0]
-        triangle_index = th.stack(
+        
+        # For a bipartite graph, each triangle is of the form :
+        # (a, b) -> (b, b) -> (b, a)
+        # (a, b) -> (b, a) -> (a, a)
+        # (a, a) -> (a, b) -> (b, a)
+        # (a, a) -> (a, a) -> (a, a)
+        triangle_index_type_1 = th.stack(
             [
-                edge_id_to_edge_num[triangles[0] * n + triangles[1]],
-                edge_id_to_edge_num[triangles[1] * n + triangles[2]],
-                edge_id_to_edge_num[triangles[0] * n + triangles[2]],
+                edge_id_to_edge_num[edge_index[0] * n + edge_index[1]],  # Edge (a, b)
+                edge_id_to_edge_num[edge_index[1] * n + edge_index[1]],  # Edge (b, b)
+                edge_id_to_edge_num[edge_index[1] * n + edge_index[0]]   # Edge (b, a)
             ]
+        )
+        
+        triangle_index_type_2 = th.stack(
+            [
+                edge_id_to_edge_num[edge_index[0] * n + edge_index[1]],  # Edge (a, b)
+                edge_id_to_edge_num[edge_index[1] * n + edge_index[0]],  # Edge (b, a)
+                edge_id_to_edge_num[edge_index[0] * n + edge_index[0]]   # Edge (a, a)
+            ]
+        )
+        
+        triangle_index_type_3 = th.stack(
+            [
+                edge_id_to_edge_num[self_loop_index[0] * n + self_loop_index[0]],  # Edge (a, a)
+                edge_id_to_edge_num[self_loop_index[0] * n + self_loop_index[1]],  # Edge (a, b)
+                edge_id_to_edge_num[self_loop_index[1] * n + self_loop_index[0]]   # Edge (b, a)
+            ]
+        )
+        
+        triangle_index_type_4 = th.stack(
+            [
+                edge_id_to_edge_num[self_loop_index[0] * n + self_loop_index[0]],  # Edge (a, a)
+                edge_id_to_edge_num[self_loop_index[0] * n + self_loop_index[0]],  # Edge (a, a)
+                edge_id_to_edge_num[self_loop_index[0] * n + self_loop_index[0]]   # Edge (a, a)
+            ]
+        )
+        
+        triangle_index = th.cat(
+            [
+                triangle_index_type_1,
+                triangle_index_type_2,
+                triangle_index_type_3,
+                triangle_index_type_4
+            ], dim = 1
         )
 
         # Layers
