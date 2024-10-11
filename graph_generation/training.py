@@ -12,7 +12,7 @@ from matplotlib.figure import Figure
 from omegaconf import OmegaConf
 from torch.optim import Adam
 from scipy.spatial import ConvexHull
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection, Line3DCollection
 
 import wandb
 
@@ -360,6 +360,7 @@ class Trainer:
                 # Draw nodes
                 nx.draw_networkx_nodes(G, pos, ax=ax, node_size=node_size, node_color=node_color, alpha=1, linewidths=1, edgecolors='black')
                 
+                # Title
                 ax.axis('off')
                 ax.title.set_text(f"N = {len(H.nodes)}")
                 ax.title.set_fontsize(40)
@@ -390,15 +391,26 @@ class Trainer:
             
                 # Plot filled edges (faces)
                 face_collection = []
+                line_collection = []
                 for edge in H.edges:
                     edge_nodes = list(H.edges[edge])
-                    if len(edge_nodes) > 2:  # Only plot edges with 3 or more nodes
+                
+                    if len(edge_nodes) > 2:  # Only plot faces with 3 or more nodes
                         face = np.array([positions[node] for node in edge_nodes])
                         face_collection.append(face)
-            
+                    elif len(edge_nodes) == 2:  # Plot lines for edges with exactly 2 nodes
+                        line = np.array([positions[node] for node in edge_nodes])
+                        line_collection.append(line)
+                
+                # Plot the polygons (for edges with 3 or more nodes)
                 if face_collection:
                     poly = Poly3DCollection(face_collection, alpha=0.25, facecolor='r', edgecolor='k')
                     ax.add_collection3d(poly)
+                
+                # Plot the lines (for edges with exactly 2 nodes)
+                if line_collection:
+                    lines = Line3DCollection(line_collection, colors='black', linewidths=2)
+                    ax.add_collection3d(lines)
             
                 # Set labels and title
                 ax.set_xlabel('X')
@@ -411,6 +423,10 @@ class Trainer:
                 ax.set_xlim(pos_min, pos_max)
                 ax.set_ylim(pos_min, pos_max)
                 ax.set_zlim(pos_min, pos_max)
+                
+                # Title
+                ax.title.set_text(f"N = {len(H.nodes)}")
+                ax.title.set_fontsize(40)
                 
         fig.tight_layout()
         results["examples"] = fig

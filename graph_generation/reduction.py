@@ -378,7 +378,7 @@ class EdgeReduction(Reduction):
         B = self.A[edge, :]
         
         if self.node_features is not None:
-            distance_features = np.sum((self.node_features[edge[0]] - self.node_features[edge[1]])**2)
+            distance_features = np.sum((self.node_features[u] - self.node_features[v])**2)
             
             return distance_features + np.linalg.norm(B.T @ L @ B)
         else:
@@ -386,9 +386,22 @@ class EdgeReduction(Reduction):
 
 
 class ReductionFactory:
-    def getBipartiteAdj(self, H) -> csr_array:
-        incidence_matrix = H.incidence_matrix()
+    def getIncidenceMatrix(self, H) -> csr_array:
+        rows = []
+        col = []
         
+        dic_nodes = {node : i for node, i in zip(H.nodes, range(len(list(H.nodes))))}
+        dic_edges = {edge : i for edge, i in zip(H.edges, range(len(list(H.edges))))}
+        
+        for edge in H.edges:
+            for node in H.edges[edge]:
+                rows.append(dic_nodes[node])
+                col.append(dic_edges[edge])
+        
+        coo_mat = coo_array((np.ones(len(rows)), (rows, col)), (len(list(H.nodes)), len(list(H.edges))))
+        return csr_array(coo_mat)
+        
+    def getBipartiteAdj(self, incidence_matrix) -> csr_array:
         # Ensure the incidence matrix is in CSR format
         incidence_matrix = csr_array(incidence_matrix)
         
@@ -406,9 +419,7 @@ class ReductionFactory:
         
         return csr_array(bipartite_adjacency)
 
-    def getCliqueAdj(self, H) -> csr_array:
-        incidence_matrix = csr_array(H.incidence_matrix())
-        
+    def getCliqueAdj(self, incidence_matrix) -> csr_array:
         # Compute the diagonal matrix D_E
         hyperedge_degrees = np.array(incidence_matrix.sum(axis=0)).flatten()
         D_E_inv = diags(1 / hyperedge_degrees)
@@ -479,5 +490,7 @@ class ReductionFactory:
         reduction.max_red_frac = self.max_red_frac
         reduction.red_threshold = self.red_threshold
         reduction.rand_lambda = self.rand_lambda
+        
+        incidence_matrix = self.getIncidenceMatrix(H)
 
-        return reduction(self.getBipartiteAdj(H), self.getCliqueAdj(H), node_features, hyperedge_features)
+        return reduction(self.getBipartiteAdj(incidence_matrix), self.getCliqueAdj(incidence_matrix), node_features, hyperedge_features)

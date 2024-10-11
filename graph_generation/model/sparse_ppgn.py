@@ -64,10 +64,10 @@ class SparsePPGN(Module):
         
         # Out layers
         self.node_out_layer = Linear(
-            (num_layers + 1) * hidden_features, expansion_node_out_features + node_out_features + hyperedge_out_features
+            (num_layers + 1) * hidden_features, expansion_node_out_features + node_out_features*2 + hyperedge_out_features
         )
         self.edge_node_out_layer = Linear(
-            (num_layers + 1) * hidden_features, expansion_node_out_features + node_out_features + hyperedge_out_features
+            (num_layers + 1) * hidden_features, expansion_node_out_features + node_out_features*2 + hyperedge_out_features
         )
         self.edge_out_layer = Linear(
             (num_layers + 1) * hidden_features, expansion_edge_out_features
@@ -219,8 +219,6 @@ class SparsePPGN(Module):
         n = node_attr.size(0) + edge_node_attr.size(0)
         
         # Map edges to unique edge IDs
-        #edge_id = edge_index_ext[0] * n + edge_index_ext[1]
-        #edge_id_to_edge_num = SparseTensor(row=edge_index_ext[0], col=edge_index_ext[1], value=edge_id, sparse_sizes=(n, n))
         edge_id = edge_index_ext[0] * n + edge_index_ext[1]
         edge_id_to_edge_num = th.full((n * n,), -1, dtype=th.long, device=x.device)
         edge_id_to_edge_num[edge_id] = th.arange(edge_id.size(0), device=x.device)
@@ -298,7 +296,7 @@ class SparsePPGN(Module):
             reduce="mean",
         )[1]
 
-        return out_node[:,self.node_features_dim:], out_edge_node[:, self.node_features_dim:], out_edge, out_node[:, :self.node_features_dim], out_edge_node[:, :self.node_features_dim]
+        return out_node[:, 2*self.node_features_dim:], out_edge_node[:, 2*self.node_features_dim:], out_edge, out_node[:, :2*self.node_features_dim], out_edge_node[:, :2*self.node_features_dim]
 
 
 class SparsePPGNLayer(Module):

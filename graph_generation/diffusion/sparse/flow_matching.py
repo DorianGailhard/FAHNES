@@ -70,6 +70,9 @@ class CFMModel(Module):
                     edge_attr_self_cond = edge_attr_self_cond.detach()
                     
                     if node_features is not None:
+                        node_features_nodes_self_cond = th.exp(node_features_nodes_self_cond[:,0::2]) * node_features_nodes_self_cond[:,1::2]
+                        node_features_edge_nodes_self_cond = th.exp(node_features_edge_nodes_self_cond[:,0::2]) * node_features_edge_nodes_self_cond[:,1::2]
+                        
                         node_features_self_cond = th.zeros_like(node_features)
                         node_features_self_cond[node_type == 1] = node_features_nodes_self_cond
                         node_features_self_cond[node_type == 0] = node_features_edge_nodes_self_cond
@@ -102,6 +105,11 @@ class CFMModel(Module):
             **model_kwargs,
         )
         
+        # The direction magnitude for features can be both small (precision is needed, refinement) or huge (precision not needed, coarse approximation refined later)
+        if node_features_nodes_pred is not None:
+            node_features_nodes_pred = th.exp(node_features_nodes_pred[:,0::2]) * node_features_nodes_pred[:,1::2]
+            node_features_edge_nodes_pred = th.exp(node_features_edge_nodes_pred[:,0::2]) * node_features_edge_nodes_pred[:,1::2]
+        
         return node_attr_pred, edge_node_attr_pred, edge_attr_pred, node_features_nodes_pred, node_features_edge_nodes_pred
 
 
@@ -123,13 +131,8 @@ class CFM:
         self.model_wrapper.to(device)
         return self
     
-    def get_loss(self, edge_index, batch, node_type, node_attr, edge_node_attr, edge_attr, node_features_expanded, node_features_real, hyperedge_features_expanded, hyperedge_features_real, model, model_kwargs):
+    def get_loss(self, edge_index, batch, node_type, node_attr, edge_node_attr, edge_attr, node_features_expanded, node_features_real, node_cluster_size_expanded, node_cluster_size_real, hyperedge_features_expanded, hyperedge_features_real, model, model_kwargs):
         """Loss function for conditional flow matching."""
-        # rescale attributes to {-1, 1}
-        node_attr = node_attr.float() * 2 - 1
-        edge_node_attr = edge_node_attr.float() - 1
-        edge_attr = edge_attr.float() * 2 - 1
-        
         # sample noise level
         num_graphs = batch.max().item() + 1
         t = th.rand((num_graphs,), device=self.device)
@@ -137,9 +140,45 @@ class CFM:
         # sample noise
         edge_batch = batch[edge_index[0]]
 
-        node_noise = th.randn_like(node_attr)
-        edge_node_noise = th.randn_like(edge_node_attr)
-        edge_noise = self.edge_randn(edge_index)
+        node_start = th.randn_like(node_attr)
+        node_start = th.vstack((node_start, node_cluster_size_expanded)).t()
+        node_end = th.vstack((node_attr, node_cluster_size_real)).t()
+
+        
+        # Compute target
+        node_cluster_size_full = th.zeros(node_type.shape[0], device=self.device)
+        node_cluster_size_full[node_type == 1] = node_cluster_size_real
+        
+        # For hyperedges, set final cluster_size as average of the nodes it contains
+        # Get indices of the nodes forming edges from edge_index
+        src_nodes = edge_index[0]
+        dst_nodes = edge_index[1]
+        
+        # Initialize neighbor sum and count to accumulate features and number of neighbors
+        neighbor_sum = th.zeros_like(node_cluster_size_full)
+        neighbor_count = th.zeros(node_type.shape[0], device=self.device)
+        
+        # Accumulate the features of the neighbors
+        neighbor_sum.index_add_(0, src_nodes, node_cluster_size_full[dst_nodes])
+        neighbor_sum.index_add_(0, dst_nodes, node_cluster_size_full[src_nodes])
+        
+        # Accumulate the count of neighbors
+        neighbor_count.index_add_(0, src_nodes, th.ones_like(src_nodes, dtype=neighbor_count.dtype))
+        neighbor_count.index_add_(0, dst_nodes, th.ones_like(dst_nodes, dtype=neighbor_count.dtype))
+        
+        # Avoid division by zero (in case a node has no neighbors)
+        neighbor_count = neighbor_count.clamp(min=1)
+        
+        # Compute the average of neighbor features
+        neighbor_avg = neighbor_sum / neighbor_count
+        edge_node_end = neighbor_avg[node_type == 0]
+        
+        edge_node_end = th.vstack((edge_node_attr, edge_node_end)).t()
+        edge_node_start = th.randn_like(edge_node_end)
+        
+        
+        edge_start = self.edge_randn(edge_index)
+        
         
         node_features_start = None
         node_features_full = None
@@ -149,10 +188,6 @@ class CFM:
             node_features_full[node_type == 1] = node_features_real
             
             # For hyperedges, set features as average of the nodes it contains
-            # Get indices of the nodes forming edges from edge_index
-            src_nodes = edge_index[0]
-            dst_nodes = edge_index[1]
-            
             # Initialize neighbor sum and count to accumulate features and number of neighbors
             neighbor_sum = th.zeros_like(node_features_full)
             neighbor_count = th.zeros(node_type.shape[0], device=self.device)
@@ -181,15 +216,16 @@ class CFM:
             # Expand t to allow multipliying
             n_dims = node_features_full.dim()
             t_expanded = t[batch].view(-1, *([1] * (n_dims - 1)))
+            t_expanded_attr = t[batch].view(-1, 1)
             
         # Forward model to predict flow
         node_attr_pred, edge_node_attr_pred, edge_attr_pred, node_features_nodes_pred, node_features_edge_nodes_pred = self.model_wrapper(
             edge_index=edge_index,
             batch=batch,
             node_type=node_type,
-            node_attr=(t[batch[node_type==1]] * node_attr + (1-(1-self.sigma_min)*t[batch[node_type==1]]) * node_noise).unsqueeze(1),
-            edge_node_attr=(t[batch[node_type==0]] * edge_node_attr + (1-(1-self.sigma_min)*t[batch[node_type==0]]) * edge_node_noise).unsqueeze(1),
-            edge_attr=(t[edge_batch] * edge_attr + (1-(1-self.sigma_min)*t[edge_batch]) * edge_noise).unsqueeze(1),
+            node_attr=t_expanded_attr[batch[node_type==1]] * node_end + (1-t_expanded_attr[batch[node_type==1]]) * node_start + self.sigma_min*th.randn_like(node_end),
+            edge_node_attr=t_expanded_attr[batch[node_type==0]] * edge_node_end + (1-(1-self.sigma_min)*t_expanded_attr[batch[node_type==0]]) * edge_node_start,
+            edge_attr=(t[edge_batch] * edge_attr + (1-(1-self.sigma_min)*t[edge_batch]) * edge_start).unsqueeze(1),
             node_features=t_expanded * node_features_full + (1-t_expanded) * node_features_start + self.sigma_min*th.randn_like(node_features_full) if node_features_expanded is not None else None,
             t=t,
             model=model,
@@ -200,9 +236,9 @@ class CFM:
         edge_node_attr_pred = edge_node_attr_pred.float().squeeze(1)
         edge_attr_pred = edge_attr_pred.float().squeeze(1)
 
-        node_loss = (node_attr_pred - (node_attr - (1-self.sigma_min)*node_noise)) ** 2
-        edge_node_loss = (edge_node_attr_pred - (edge_node_attr - (1-self.sigma_min)*edge_node_noise)) ** 2
-        edge_loss = (edge_attr_pred - (edge_attr - (1-self.sigma_min)*edge_noise)) ** 2
+        node_loss = (node_attr_pred - (node_end - (1-self.sigma_min)*node_start)) ** 2
+        edge_node_loss = (edge_node_attr_pred - (edge_node_end - (1-self.sigma_min)*edge_node_start)) ** 2
+        edge_loss = (edge_attr_pred - (edge_attr - (1-self.sigma_min)*edge_start)) ** 2
         
         nodes_node_features_loss = None
         edge_nodes_node_features_loss = None
@@ -211,23 +247,43 @@ class CFM:
             nodes_node_features_loss = (node_features_nodes_pred - (node_features_full[node_type == 1] - node_features_start[node_type == 1]))**2
             edge_nodes_node_features_loss = (node_features_edge_nodes_pred - (node_features_full[node_type == 0] - node_features_start[node_type == 0]))**2
             
+            
+            
+            
+        """node_pred, edge_node_pred, augmented_edge_pred, node_features_pred, hyperedge_features_pred = self.sample(edge_index, node_type, node_features_expanded, None, batch, model, model_kwargs)
+        
+        diff = node_features_pred - node_features_real
+
+        # Flatten the diff tensor if it's multi-dimensional
+        flat_diff = diff.flatten()
+        
+        idx = th.argmax(flat_diff**2)
+        
+        print(diff)
+        print(f"real : {node_features_real.flatten()[idx]}")
+        print(f"pred : {node_features_pred.flatten()[idx]}")"""
+        
+            
         return node_loss, edge_node_loss, edge_loss, nodes_node_features_loss, edge_nodes_node_features_loss, None
 
 
     @th.no_grad()
-    def sample(self, edge_index, node_type, node_features, hyperedge_features, batch, model, model_kwargs):
+    def sample(self, edge_index, node_type, node_features, hyperedge_features, node_cluster_size, batch, model, model_kwargs):
         """Sampling procedure for CFM."""
         num_graphs = batch.max().item() + 1
         
         # Start from random initialization
-        node_attr_next = th.randn_like(batch[node_type == 1], dtype=th.float32)[:, None]
-        edge_node_attr_next = th.randn_like(batch[node_type == 0], dtype=th.float32)[:, None]
+        node_attr_next = th.randn_like(batch[node_type == 1], dtype=th.float32)
+        edge_node_attr_next = th.randn_like(batch[node_type == 0], dtype=th.float32)
         edge_attr_next = self.edge_randn(edge_index, dtype=th.float32)[:, None]
 
+        node_attr_next = th.vstack((node_attr_next, node_cluster_size)).t()
+        edge_node_attr_next = th.vstack((edge_node_attr_next, th.randn_like(edge_node_attr_next))).t()
+        
         node_features_next = None
         if node_features is not None:
             node_features_next = th.zeros((node_type.shape[0],) + node_features.shape[1:], device=self.device, dtype=th.float32)
-            node_features_next[node_type == 1] = node_features
+            node_features_next[node_type == 1] = node_features + self.sigma_min*th.randn_like(node_features)
             node_features_next[node_type == 0] = th.randn_like(node_features_next[node_type == 0])
 
         # Flow matching sampling: Integrate learned flow model over time (0 to 1)
@@ -257,14 +313,8 @@ class CFM:
             if node_features is not None:
                 node_features_next[node_type == 1] += dt * node_features_nodes_pred
                 node_features_next[node_type == 0] += dt * node_features_edge_nodes_pred
-                
 
-        # rescale attributes to {0, 1} and {0, 2}
-        node_attr_out = (node_attr_next + 1) / 2
-        edge_node_attr_out = edge_node_attr_next + 1
-        edge_attr_out = (edge_attr_next + 1) / 2
-
-        return node_attr_out.squeeze(1), edge_node_attr_out.squeeze(1), edge_attr_out.squeeze(1), node_features_next[node_type == 1] if node_features_next is not None else None, None
+        return node_attr_next, edge_node_attr_next[:, 0], edge_attr_next.squeeze(1), node_features_next[node_type == 1] if node_features_next is not None else None, None
 
 
     @staticmethod

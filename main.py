@@ -84,9 +84,9 @@ def get_expansion_items(cfg: DictConfig, train_hypergraphs):
             hyperedge_in_features=cfg.dataset.hyperedge_features_dim,
             hyperedge_out_features=cfg.dataset.hyperedge_features_dim,
             hyperedge_emb_features=cfg.model.hyperedge_emb_features,
-            expansion_node_in_features=1,
+            expansion_node_in_features=2,
             expansion_edge_in_features=1,
-            expansion_node_out_features=1,
+            expansion_node_out_features=2,
             expansion_edge_out_features=1,
             expansion_emb_features=cfg.model.expansion_emb_features,
             hidden_features=cfg.model.hidden_features,
@@ -196,6 +196,19 @@ def main(cfg: DictConfig):
         gg.metrics.Uniqueness(),
         gg.metrics.Novelty(),
     ]
+    
+    if "hypergraphEgo" in cfg.dataset.name:
+        validation_metrics += [gg.metrics.ValidEgo(),
+    ]
+    
+    if "hypergraphTree" in cfg.dataset.name:
+        validation_metrics += [gg.metrics.ValidHypertree(),
+        ]
+        
+    if "hypergraphSBM" in cfg.dataset.name:
+        validation_metrics += [gg.metrics.ValidSBM(),
+        ]
+
     
     if "shapeNet" in cfg.dataset.name:
         validation_metrics += [gg.metrics.ChamferDistance(),

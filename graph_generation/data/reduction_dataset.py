@@ -40,12 +40,14 @@ class RandRedDataset(IterableDataset, ABC):
                     adj=red.bipartite_adj.astype(bool).astype(np.float32),
                     node_type=node_type,
                     node_features=red.node_features,
+                    node_cluster_size=red.node_cluster_size,
                     hyperedge_features=red.hyperedge_features,
                     node_expansion=red.node_expansion,
                     edge_expansion=red.edge_expansion,
                     adj_reduced=reduced_hypergraph.bipartite_adj.astype(bool).astype(np.float32),
                     node_type_reduced=node_type_reduced,
                     node_features_reduced=reduced_hypergraph.node_features,
+                    node_cluster_size_reduced=reduced_hypergraph.node_cluster_size,
                     hyperedge_features_reduced=reduced_hypergraph.hyperedge_features,
                     expansion_matrix=reduced_hypergraph.expansion_matrix,
                     spectral_features_reduced=self.spectrum_extractor(reduced_hypergraph.bipartite_adj)
@@ -57,6 +59,21 @@ class RandRedDataset(IterableDataset, ABC):
                 break
                 
             red = reduced_hypergraph
+            
+        """adjs = []
+        features = []
+        num_nodes = []
+        
+        for b in data:
+            adjs.append(b.adj.to_dense().cpu().numpy())
+            features.append(b.node_features.cpu().numpy())
+            num_nodes.append(th.sum(b.node_type).item())
+            
+            data = {"adj" : adjs, "features":features, "num_nodes":num_nodes}
+            
+        with open('data.pkl', 'wb') as file:
+            pickle.dump(data, file)
+        sys.exit("Sequence finished.")"""
 
         return data
 
