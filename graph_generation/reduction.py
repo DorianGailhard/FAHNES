@@ -106,7 +106,7 @@ class Reduction(ABC):
         expansion_matrix = bmat([[P_inv, None], [None, edge_lifting_matrix]], format='coo')
         
         # Compute coarsened features and new cluster sizes
-        node_cluster_size = None
+        node_cluster_size = np.atleast_1d(P_inv.T @ self.node_cluster_size)  # (k,)
         node_features = None
         if self.node_features is not None:
             # Step 1: Weight the features by the current node_cluster_size
@@ -123,10 +123,7 @@ class Reduction(ABC):
             # Reshape back to the original feature dimensions
             summed_weighted_features = summed_weighted_features.reshape((P_inv.T.shape[0],) + original_shape[1:])  # (k, d1, d2, ...)
     
-            # Step 3: Compute the sum of weights for each cluster
-            node_cluster_size = np.atleast_1d(P_inv.T @ self.node_cluster_size)  # (k,)
-    
-            # Step 4: Reshape summed weights for broadcasting and compute weighted average features
+            # Step 3: Reshape summed weights for broadcasting and compute weighted average features
             summed_weights_reshaped = node_cluster_size.reshape((-1,) + (1,) * (summed_weighted_features.ndim - 1))
             node_features = summed_weighted_features / summed_weights_reshaped # + np.random.rand(*summed_weighted_features.shape) * np.sqrt(1/summed_weighted_features.shape[0])
             

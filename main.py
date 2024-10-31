@@ -128,6 +128,7 @@ def get_expansion_items(cfg: DictConfig, train_hypergraphs):
         min_red_frac=cfg.reduction.min_red_frac,
         max_red_frac=cfg.reduction.max_red_frac,
         red_threshold=cfg.reduction.red_threshold,
+        features_noise_perturbation=cfg.method.features_noise_perturbation
     )
 
     return {

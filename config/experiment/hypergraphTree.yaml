@@ -7,13 +7,16 @@ defaults:
 name: hypergraphTree
 
 dataset:
-  name: hypergraphTree 
+  name: hypergraphTree
+  visualization: hypergraph
   node_features_dim: 0
   hyperedge_features_dim: 0
-
+  
+method:
+  features_noise_perturbation: 0
+  
 training:
   batch_size: 32
-  visualization: hypergraph
 
 validation:
   batch_size: 20

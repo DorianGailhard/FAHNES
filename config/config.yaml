@@ -58,7 +58,7 @@ model:
 
 sign_net:
   hidden_features: 128
-  num_layers: 5
+  num_layers: 10
 
 ema:
   betas: [0.99, 0.999, 0.9999, 1]

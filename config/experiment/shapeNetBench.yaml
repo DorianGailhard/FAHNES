@@ -8,12 +8,15 @@ name: shapeNetBench
 
 dataset:
   name: shapeNetBench
+  visualization: mesh
   node_features_dim: 3
   hyperedge_features_dim: 0
 
+method:
+  features_noise_perturbation: 0.3
+
 training:
   batch_size: 20
-  visualization: mesh
 
 validation:
   batch_size: 20

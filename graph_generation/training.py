@@ -311,7 +311,7 @@ class Trainer:
                     )
 
         # Sample plots
-        if self.cfg.training.visualization == 'hypergraph':
+        if self.cfg.dataset.visualization == 'hypergraph':
             n = min(4, len(self.validation_hypergraphs)) // 2
             fig, axs = plt.subplots(n, 2, figsize=(50, 50))
             
@@ -364,7 +364,7 @@ class Trainer:
                 ax.axis('off')
                 ax.title.set_text(f"N = {len(H.nodes)}")
                 ax.title.set_fontsize(40)
-        elif self.cfg.training.visualization == 'mesh':
+        elif self.cfg.dataset.visualization == 'mesh':
             n = min(4, len(self.validation_hypergraphs)) // 2
             fig = plt.figure(figsize=(50, 50))
             axs = []
