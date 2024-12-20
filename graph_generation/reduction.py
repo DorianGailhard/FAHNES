@@ -16,6 +16,7 @@ class Reduction(ABC):
 
     preserved_eig_size: int
     local_variation_cost: bool
+    topological_cost_importance: real
     sqrt_partition_size: bool
     weighted_reduction: bool
     min_red_frac: real
@@ -27,7 +28,7 @@ class Reduction(ABC):
         self.bipartite_adj = bipartite_adj
         self.clique_adj = clique_adj
         self.n = clique_adj.shape[0]
-
+        
         if node_features is not None:
             self.node_features = node_features.astype(np.float64)
         else:
@@ -238,11 +239,34 @@ class Reduction(ABC):
     def get_coarsening_matrix(self, rng):
         # get the contraction sets and their costs
         contraction_sets = self.get_contraction_sets()
-        costs = (
-            np.apply_along_axis(self.get_cost, 1, contraction_sets)
+        topological_costs = (
+            np.apply_along_axis(self.get_topological_cost, 1, contraction_sets)
             if len(contraction_sets) > 0
             else np.array([])
         )
+        
+        if self.node_features is not None:
+            features_costs = (
+                np.apply_along_axis(self.get_features_cost, 1, contraction_sets)
+                if len(contraction_sets) > 0
+                else np.array([])
+            )
+            
+            # Get maximum values ignoring infinities, handle empty array case
+            finite_topological = topological_costs[~np.isinf(topological_costs)]
+            finite_features = features_costs[~np.isinf(features_costs)]
+            
+            topological_max = np.max(finite_topological) if finite_topological.size > 0 else 1
+            features_max = np.max(finite_features) if finite_features.size > 0 else 1
+            
+            # Normalize each cost, preserving the infinite values
+            topological_costs /= max(1, topological_max)
+            features_costs /= max(1, features_max)
+            
+            # Weight costs
+            costs = self.topological_cost_importance * topological_costs + (1 - self.topological_cost_importance) * features_costs
+        else:
+            costs = topological_costs
 
         # compute reduction fraction
         if self.n <= self.red_threshold:
@@ -262,7 +286,7 @@ class Reduction(ABC):
         # As we dynamically reduce the incidence matrix, the indices in the
         # contraction_set do not correspond to those of the matrix
         index_map = np.arange(incidence_matrix.shape[0])
-
+        
         for contraction_set in contraction_sets:
             if (
                 not marked[contraction_set].any()
@@ -320,7 +344,7 @@ class Reduction(ABC):
     def get_contraction_sets(self) -> Sequence[NDArray]:
         pass
 
-    def get_cost(self, nodes: NDArray) -> real:
+    def get_topological_cost(self, nodes: NDArray) -> real:
         if self.local_variation_cost:
             return self.get_local_variation_cost(nodes)
         else:
@@ -337,12 +361,19 @@ class Reduction(ABC):
         L = np.diag(2 * self.node_degree[nodes] - W @ ones) - W
         B = (np.eye(nc) - np.outer(ones, ones) / nc) @ self.A[nodes, :]
         
-        if self.node_features is not None:
-            distance_features = np.sum((self.node_features[nodes[0]] - self.node_features[nodes[1]])**2)
-            
-            return distance_features #+ np.linalg.norm(B.T @ L @ B) / (nc - 1)
-        else:
-            return np.linalg.norm(B.T @ L @ B) / (nc - 1)
+        return np.linalg.norm(B.T @ L @ B) / (nc - 1)
+        
+        
+    def get_features_cost(self, nodes: NDArray) -> real:
+        return self.get_squared_distance_cost(nodes)
+
+    def get_squared_distance_cost(self, nodes: NDArray) -> real:
+        """Compute the squared distance cost for a set of nodes with features """
+        nc = len(nodes)
+        if nc == 1:
+            return np.inf
+
+        return np.sum((self.node_features[nodes[0]] - self.node_features[nodes[1]])**2)
 
 
 class NeighborhoodReduction(Reduction):
@@ -438,6 +469,7 @@ class ReductionFactory:
         self,
         contraction_family,
         cost_type,
+        topological_cost_importance,
         preserved_eig_size,
         sqrt_partition_size,
         weighted_reduction,
@@ -448,6 +480,7 @@ class ReductionFactory:
     ):
         self.contraction_family = contraction_family
         self.cost_type = cost_type
+        self.topological_cost_importance = topological_cost_importance
         self.preserved_eig_size = preserved_eig_size
         self.sqrt_partition_size = sqrt_partition_size
         self.weighted_reduction = weighted_reduction
@@ -470,6 +503,8 @@ class ReductionFactory:
             reduction.local_variation_cost = False
         else:
             raise ValueError("Unknown reduction cost type.")
+            
+        reduction.topological_cost_importance = self.topological_cost_importance
             
         node_features = None
         hyperedge_features= None

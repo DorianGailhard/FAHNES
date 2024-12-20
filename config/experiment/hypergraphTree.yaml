@@ -14,6 +14,9 @@ dataset:
   
 method:
   features_noise_perturbation: 0
+ 
+reduction:
+  topological_cost_importance: 1
   
 training:
   batch_size: 32

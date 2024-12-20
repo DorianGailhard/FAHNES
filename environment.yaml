@@ -276,4 +276,5 @@ dependencies:
       - platformdirs==4.2.2
       - pytz==2024.1
       - hypernetx==2.3.5
+      - POT
       - -e .

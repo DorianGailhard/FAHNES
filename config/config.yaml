@@ -48,11 +48,11 @@ testing: False # if True, only evaluate on test set
 
 model:
   name: ppgn
-  node_emb_features: 32
-  hyperedge_emb_features: 32
-  expansion_emb_features: 32
-  hidden_features: 128
-  ppgn_features: 128
+  node_emb_features: 64
+  hyperedge_emb_features: 64
+  expansion_emb_features: 64
+  hidden_features: 256
+  ppgn_features: 256
   num_layers: 10
   dropout: 0.1
 

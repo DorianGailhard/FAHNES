@@ -23,6 +23,7 @@ class SparsePPGN(Module):
         hyperedge_out_features,
         hyperedge_emb_features,
         expansion_node_in_features: int,
+        expansion_edge_node_in_features: int,
         expansion_edge_in_features: int,
         expansion_node_out_features: int,
         expansion_edge_out_features: int,
@@ -46,7 +47,7 @@ class SparsePPGN(Module):
 
         # Embedding layers
         self.node_emb_layer = Linear(expansion_node_in_features*(1+self_conditioning), expansion_emb_features)
-        self.edge_node_emb_layer = Linear(expansion_node_in_features*(1+self_conditioning), expansion_emb_features)
+        self.edge_node_emb_layer = Linear(expansion_edge_node_in_features*(1+self_conditioning), expansion_emb_features)
         self.edge_emb_layer = Linear(expansion_edge_in_features*(1+self_conditioning), expansion_emb_features)
         self.noise_cond_emb_layer = Linear(1, expansion_emb_features)
         self.red_frac_emb_layer = Linear(1, expansion_emb_features)
@@ -64,10 +65,10 @@ class SparsePPGN(Module):
         
         # Out layers
         self.node_out_layer = Linear(
-            (num_layers + 1) * hidden_features, expansion_node_out_features + node_out_features*2 + hyperedge_out_features
+            (num_layers + 1) * hidden_features, expansion_node_out_features + node_out_features + hyperedge_out_features
         )
         self.edge_node_out_layer = Linear(
-            (num_layers + 1) * hidden_features, expansion_node_out_features + node_out_features*2 + hyperedge_out_features
+            (num_layers + 1) * hidden_features, expansion_node_out_features + node_out_features + hyperedge_out_features
         )
         self.edge_out_layer = Linear(
             (num_layers + 1) * hidden_features, expansion_edge_out_features
@@ -87,6 +88,7 @@ class SparsePPGN(Module):
         edge_index,
         batch,
         node_type,
+        node_cluster_size,
         node_attr,
         edge_node_attr,
         edge_attr,
@@ -98,7 +100,7 @@ class SparsePPGN(Module):
         target_size,
     ):
         # Embedding
-        node_attr_emb = self.node_emb_layer(node_attr)
+        node_attr_emb = self.node_emb_layer(node_attr)#th.cat((node_cluster_size, node_attr), dim=1))
         edge_node_attr_emb = self.edge_node_emb_layer(edge_node_attr)
         edge_attr_emb = self.edge_emb_layer(edge_attr)
         noise_cond_emb = self.noise_cond_emb_layer(noise_cond[..., None])
@@ -176,8 +178,8 @@ class SparsePPGN(Module):
             x_edge = th.cat(
                 [
                     edge_attr_emb,
-                    all_nodes_emb[edge_index[0]],
-                    all_nodes_emb[edge_index[1]],
+                    all_nodes_emb[th.minimum(edge_index[0], edge_index[1])], # edge index is sorted so left side nodes always come first
+                    all_nodes_emb[th.maximum(edge_index[0], edge_index[1])],
                     noise_cond_emb[edge_batch],
                     red_frac_emb[edge_batch],
                     target_size_emb[edge_batch],
@@ -188,8 +190,8 @@ class SparsePPGN(Module):
             x_edge = th.cat(
                 [
                     edge_attr_emb,
-                    all_nodes_emb[edge_index[0]],
-                    all_nodes_emb[edge_index[1]],
+                    all_nodes_emb[th.minimum(edge_index[0], edge_index[1])],
+                    all_nodes_emb[th.maximum(edge_index[0], edge_index[1])],
                     noise_cond_emb[edge_batch],
                     red_frac_emb[edge_batch],
                     target_size_emb[edge_batch],
@@ -269,6 +271,7 @@ class SparsePPGN(Module):
             ], dim = 1
         )
 
+
         # Layers
         num_messages = scatter(
             th.ones(triangle_index.size(1), device=x.device), triangle_index[2], dim=0
@@ -296,7 +299,7 @@ class SparsePPGN(Module):
             reduce="mean",
         )[1]
 
-        return out_node[:, 2*self.node_features_dim:], out_edge_node[:, 2*self.node_features_dim:], out_edge, out_node[:, :2*self.node_features_dim], out_edge_node[:, :2*self.node_features_dim]
+        return out_node[:, self.node_features_dim:], out_edge_node[:, self.node_features_dim:], out_edge, out_node[:, :self.node_features_dim], out_edge_node[:, :self.node_features_dim]
 
 
 class SparsePPGNLayer(Module):

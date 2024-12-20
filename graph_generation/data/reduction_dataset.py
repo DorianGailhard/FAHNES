@@ -22,16 +22,37 @@ class RandRedDataset(IterableDataset, ABC):
 
     def get_random_reduction_sequence(self, reduction_level_zero, rng):
         data = []
-        red = reduction_level_zero
+        red = reduction_level_zero.get_reduced_hypergraph(rng)
+        red_next = red.get_reduced_hypergraph(rng)
         
         while True:
-            reduced_hypergraph = red.get_reduced_hypergraph(rng)
+            reduced_hypergraph = red_next.get_reduced_hypergraph(rng)
             
             node_type = np.zeros(red.bipartite_adj.shape[0])
             node_type[:red.n] = 1
             
-            node_type_reduced = np.zeros(reduced_hypergraph.bipartite_adj.shape[0])
-            node_type_reduced[:reduced_hypergraph.n] = 1
+            node_type_reduced = np.zeros(red_next.bipartite_adj.shape[0])
+            node_type_reduced[:red_next.n] = 1
+            
+            if reduced_hypergraph.node_features is not None or reduced_hypergraph.hyperedge_features is not None:
+                expansion_numbers = np.sum(reduced_hypergraph.expansion_matrix, axis=0).astype(np.int64)
+            
+                if reduced_hypergraph.node_features is not None:
+                    node_map = np.repeat(np.arange(reduced_hypergraph.n), expansion_numbers[:reduced_hypergraph.n])
+                    
+                    diff_node_features = np.abs(reduced_hypergraph.node_features[node_map] - red_next.node_features)
+                else:
+                    diff_node_features = None
+                
+                if reduced_hypergraph.hyperedge_features is not None:
+                    edge_node_map = np.repeat(np.arange(reduced_hypergraph.expansion_matrix.shape[0] - reduced_hypergraph.n), expansion_numbers[reduced_hypergraph.n:])
+                    
+                    diff_hyperedge_features = np.abs(reduced_hypergraph.hyperedge_features[edge_node_map] - red_next.hyperedge_features)
+                else:
+                    diff_hyperedge_features = None
+            else:
+                diff_node_features = None
+                diff_hyperedge_features = None
             
             data.append(
                 ReducedGraphData(
@@ -44,21 +65,25 @@ class RandRedDataset(IterableDataset, ABC):
                     hyperedge_features=red.hyperedge_features,
                     node_expansion=red.node_expansion,
                     edge_expansion=red.edge_expansion,
-                    adj_reduced=reduced_hypergraph.bipartite_adj.astype(bool).astype(np.float32),
+                    adj_reduced=red_next.bipartite_adj.astype(bool).astype(np.float32),
                     node_type_reduced=node_type_reduced,
-                    node_features_reduced=reduced_hypergraph.node_features,
-                    node_cluster_size_reduced=reduced_hypergraph.node_cluster_size,
-                    hyperedge_features_reduced=reduced_hypergraph.hyperedge_features,
-                    expansion_matrix=reduced_hypergraph.expansion_matrix,
-                    spectral_features_reduced=self.spectrum_extractor(reduced_hypergraph.bipartite_adj)
+                    node_features_reduced=red_next.node_features,
+                    node_features_diff=diff_node_features,
+                    node_cluster_size_reduced=red_next.node_cluster_size,
+                    hyperedge_features_reduced=red_next.hyperedge_features,
+                    hyperedge_features_diff=diff_hyperedge_features,
+                    expansion_matrix=red_next.expansion_matrix,
+                    spectral_features_reduced=self.spectrum_extractor(red_next.bipartite_adj)
                     if self.spectrum_extractor is not None
                     else None,
                 )
             )
-            if red.n <= 1:
+            
+            if red_next.n <= 1:
                 break
-                
-            red = reduced_hypergraph
+            
+            red = red_next
+            red_next = reduced_hypergraph
             
         """adjs = []
         features = []
