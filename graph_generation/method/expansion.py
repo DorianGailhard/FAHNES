@@ -59,10 +59,8 @@ class Expansion(Method):
             node_features = th.zeros((num_hypergraphs,) + (node_features_dim if isinstance(node_features_dim, tuple) else (node_features_dim,)), device=self.device, dtype=th.float32)
             
         if hyperedge_features_dim:
-            hyperedge_features = th.randn((num_hypergraphs,) + (hyperedge_features_dim if isinstance(hyperedge_features_dim, tuple) else (hyperedge_features_dim,)), device=self.device)
-        i = 0
+            hyperedge_features = th.zeros((num_hypergraphs,) + (hyperedge_features_dim if isinstance(hyperedge_features_dim, tuple) else (hyperedge_features_dim,)), device=self.device)
         
-        last_step = False
         while node_type.sum() < target_size.sum():
             adj, batch, node_expansion, node_type, node_features, hyperedge_features, node_cluster_size = self.expand(
                 adj,
@@ -77,28 +75,8 @@ class Expansion(Method):
                 sign_net=sign_net,
             )
             
-            
-            
-            """adjs = []
-            features = []
-            num_nodes = []
-            
-            adjs.append(adj.to_dense().cpu().numpy())
-            features.append(node_features.cpu().numpy())
-            num_nodes.append(th.sum(node_type).item())
-                
-            data = {"adj" : adjs, "features": features, "num_nodes": num_nodes}
-            
-            with open(f'data_{i}.pkl', 'wb') as file:
-                pickle.dump(data, file)
-            
-            i+= 1"""
-                
-            if last_step:
+            if node_expansion[node_type == 1].max() <= 1:
                 break
-            
-            if node_expansion.max() <= 1:
-                last_step = True
                 
         # return hypergraphs
         if node_features is not None:
@@ -238,7 +216,7 @@ class Expansion(Method):
             ),
             target_size,
         )
-
+        
         # make predictions
         node_pred, edge_node_pred, augmented_edge_pred, node_features_pred, hyperedge_features_pred = self.diffusion.sample(
             edge_index=augmented_edge_index,
@@ -246,7 +224,8 @@ class Expansion(Method):
             node_type=expanded_node_type,
             node_features=expanded_node_features,
             hyperedge_features=expanded_hyperedge_features,
-            node_cluster_size=self.int_to_coords(expanded_node_cluster_size),
+            node_cluster_size=expanded_node_cluster_size,
+            expansion_matrix_nodes=expansion_matrix[expanded_node_type == 1, :][:, node_type == 1],
             model=model,
             model_kwargs={
                 "node_emb": node_emb,
@@ -257,7 +236,11 @@ class Expansion(Method):
         )
         
         # rescale
-        node_cluster_size_pred = self.coords_to_int(node_pred[:, 1:])
+        node_cluster_size_pred = (node_pred[:, 1] + 1)/2
+              
+        print(f"expanded_node_cluster_size : {expanded_node_cluster_size}")
+        print(f"node_cluster_size_pred : {node_cluster_size_pred}")
+        print(f"node_features_pred : {node_features_pred}")
         
         node_pred = (node_pred[:, 0] + 1)/2
         edge_node_pred = edge_node_pred + 1
@@ -265,14 +248,47 @@ class Expansion(Method):
 
         # get node attributes
         if self.deterministic_expansion:
-            node_cluster_size_batch = th.arange(0, th.sum(node_type), device=self.device)[node_map]
-            node_cluster_size_frac = node_cluster_size_pred/scatter(node_cluster_size_pred, node_cluster_size_batch)[node_map]
-            node_cluster_size = th.maximum(th.ones_like(expanded_node_cluster_size).long(), (expanded_node_cluster_size * node_cluster_size_frac).round().long())
+            # Compute the predicted share of the parent's budget for each child
+            node_cluster_size_frac = th.clamp(node_cluster_size_pred, min=0) / scatter(th.clamp(node_cluster_size_pred, min=0), node_map)[node_map]
             
-            node_pred[node_cluster_size == 1] = 0
+            # Budget is at least 1
+            node_cluster_size = th.clamp((expanded_node_cluster_size * node_cluster_size_frac).round().long(), min=1)
+            
+            # Handle tie case (frac predicted is exactly 0.5)
+            tie_mask = (node_cluster_size_frac == 0.5)
+            if tie_mask.any():
+                # Get the parent cluster size for the tied nodes
+                parent_cluster_size = expanded_node_cluster_size[tie_mask]
+                
+                # Split the parent cluster size into two halves
+                half_size = parent_cluster_size // 2
+                remaining_size = parent_cluster_size - half_size
+                
+                # Assign the halves to the tied nodes
+                node_cluster_size[tie_mask] = th.where(
+                    th.arange(tie_mask.sum(), device=self.device) % 2 == 0,  # Alternate between nodes
+                    half_size,
+                    remaining_size
+                )
+            
+            # If a node comes from an expanded cluster, it can have at most the parent's budget - 1
+            node_counts = th.bincount(node_map)  # Count occurrences of each node ID in node_map
+            is_expanded = node_counts[node_map] > 1  # True for nodes from expanded clusters
+            
+            node_cluster_size_max = th.where(
+                is_expanded,
+                expanded_node_cluster_size - 1,  # Subtract 1 if expanded
+                expanded_node_cluster_size       # Keep as is otherwise
+            )
+            
+            node_cluster_size = th.minimum(node_cluster_size, node_cluster_size_max)            
+            
+            # Don't expand nodes having no budget
+            node_pred[node_cluster_size == 1] = -1 # not zero to be sure that they are not selected during the topk
             
             node_attr = th.ones_like(node_pred, dtype=th.long)
             num_new_nodes = expanded_size - size
+            
             node_range_end = size.cumsum(0)
             node_range_start = node_range_end - size
             # get top-k nodes per graph
@@ -286,10 +302,11 @@ class Expansion(Method):
                     + node_range_start[i]
                 )
                 node_attr[new_node_idx] = 2
+            node_attr[node_cluster_size == 1] = 1
         else:
             node_attr = (node_pred > 0.5).long() + 1
             node_cluster_size = th.maximum(node_cluster_size_pred.round().long(), th.ones_like(node_cluster_size_pred).long())
-        
+            
         edge_node_attr = (edge_node_pred > 0.66).long() + (edge_node_pred > 1.33).long() + 1
         
         # construct new hypergraph
@@ -307,19 +324,6 @@ class Expansion(Method):
 
     def get_loss(self, batch, model: Module, sign_net: Module):
         """Returns a weighted sum of the node and edge expansion loss and the augmented edge loss."""
-        expansion_numbers = batch.expansion_matrix.sum(0).long()
-        all_node_map = th.repeat_interleave(
-            th.arange(0, batch.adj_reduced.size(0), device=self.device), expansion_numbers
-        )
-        
-        node_map = th.repeat_interleave(
-            th.arange(0, th.sum(batch.node_type_reduced), device=self.device, dtype=th.int32), expansion_numbers[batch.node_type_reduced == 1]
-        )
-        
-        edge_node_map = th.repeat_interleave(
-            th.arange(0, batch.node_type_reduced.size(0) - th.sum(batch.node_type_reduced), device=self.device, dtype=th.int32), expansion_numbers[batch.node_type_reduced == 0]
-        )
-        
         # get augmented hypergraph
         adj_augmented = self.get_augmented_hypergraph(
             batch.adj_reduced, batch.expansion_matrix
@@ -331,7 +335,7 @@ class Expansion(Method):
         augmented_edge_index, edge_val = to_edge_index(adj_augmented + batch.adj)
         augmented_edge_attr = (edge_val.float() - 1) * 2 - 1
         
-        node_cluster_size_expanded = batch.node_cluster_size_reduced[node_map].float()
+        node_cluster_size_expanded = (batch.expansion_matrix_nodes @ th.unsqueeze(batch.node_cluster_size_reduced,-1)).squeeze(1).float()
         
         # get node embeddings
         if sign_net is not None:
@@ -342,23 +346,43 @@ class Expansion(Method):
         else:
             both_type_node_emb_reduced = th.randn(
                 batch.node_type.size(0), self.emb_features, device=self.device
-            ) 
-                    
-        both_type_node_emb = both_type_node_emb_reduced[all_node_map]
+            )
+                
+        both_type_node_emb = batch.expansion_matrix @ both_type_node_emb_reduced
         node_emb = both_type_node_emb[batch.node_type == 1]
         edge_node_emb = both_type_node_emb[batch.node_type == 0]
         
         node_features = None
-        hyperedge_features = None
         if hasattr(batch, 'node_features'):
             if self.features_noise_perturbation > 0:
-                node_features_reduced_noised = batch.node_features_reduced + self.features_noise_perturbation*batch.node_features_diff*th.randn_like(batch.node_features_reduced)
+                node_features_reduced_noised = batch.node_features_reduced + 0.3*th.randn_like(batch.node_features_reduced) #self.features_noise_perturbation*batch.node_features_diff*
             else:
                 node_features_reduced_noised = batch.node_features_reduced
-            node_features = node_features_reduced_noised[node_map]
+                
+            # Reshape features to 2D for sparse matrix multiplication
+            original_shape = node_features_reduced_noised.size()
+            reshaped_features = node_features_reduced_noised.reshape((original_shape[0], -1))  # (n, d1*d2*...)
             
+            node_features = batch.expansion_matrix_nodes @ reshaped_features
+            
+            # Reshape back to the original feature dimensions
+            node_features = node_features.reshape((batch.expansion_matrix_nodes.size(0),) + original_shape[1:])  # (k, d1, d2, ...)
+            
+        hyperedge_features = None
         if hasattr(batch, 'hyperedge_features'):
-            hyperedge_features = batch.hyperedge_features_reduced[edge_node_map]
+            if self.features_noise_perturbation > 0:
+                hyperedge_features_reduced_noised = batch.hyperedge_features_reduced + self.features_noise_perturbation*batch.hyperedge_features_diff*th.randn_like(batch.hyperedge_features_reduced)
+            else:
+                hyperedge_features_reduced_noised = batch.hyperedge_features_reduced
+                
+            # Reshape features to 2D for sparse matrix multiplication
+            original_shape = hyperedge_features_reduced_noised.size()
+            reshaped_features = hyperedge_features_reduced_noised.reshape((original_shape[0], -1))  # (n, d1*d2*...)
+            
+            hyperedge_features = batch.expansion_matrix_hyperedges @ reshaped_features
+            
+            # Reshape back to the original feature dimensions
+            hyperedge_features = hyperedge_features.reshape((batch.expansion_matrix_hyperedges.size(0),) + original_shape[1:])  # (k, d1, d2, ...)
             
             
         # reduction fraction
@@ -367,17 +391,19 @@ class Expansion(Method):
         red_frac = 1 - size / expanded_size
         
         # loss
-        node_loss, edge_node_loss, edge_loss, nodes_node_features_loss, edge_nodes_node_features_loss, hyperedge_features_loss = self.diffusion.get_loss(
+        node_loss, edge_node_loss, edge_loss, node_features_loss, hyperedge_features_loss = self.diffusion.get_loss(
             edge_index=augmented_edge_index,
             batch=batch.batch,
             node_type=batch.node_type,
+            expansion_matrix_nodes=batch.expansion_matrix_nodes,
+            expansion_matrix_hyperedges=batch.expansion_matrix_hyperedges,
             node_attr=node_attr,
             edge_node_attr=edge_node_attr,
             edge_attr=augmented_edge_attr,
             node_features_expanded=node_features,
             node_features_real=batch.node_features if node_features is not None else None,
-            node_cluster_size_expanded=self.int_to_coords(node_cluster_size_expanded),
-            node_cluster_size_real=self.int_to_coords(batch.node_cluster_size),
+            node_cluster_size_expanded=node_cluster_size_expanded,
+            node_cluster_size_real=batch.node_cluster_size,
             hyperedge_features_expanded=hyperedge_features,
             hyperedge_features_real=batch.hyperedge_features if hyperedge_features is not None else None,
             model=model,
@@ -388,12 +414,7 @@ class Expansion(Method):
                 "target_size": batch.target_size.float(),
             },
         )
-        
-        # ignore node_loss for first level
-        node_loss = node_loss[batch.reduction_level[batch.batch[batch.node_type == 1]] > 0].mean()
-        edge_node_loss = edge_node_loss[batch.reduction_level[batch.batch[batch.node_type == 0]] > 0].mean()
-        
-        edge_loss = edge_loss.mean()
+
         loss = node_loss + edge_node_loss + edge_loss
         
         res = {
@@ -403,20 +424,16 @@ class Expansion(Method):
         }
         
         if hasattr(batch, 'node_features'):
-            nodes_node_features_loss = nodes_node_features_loss[batch.reduction_level[batch.batch[batch.node_type == 1]] > 0].mean()
-            loss += nodes_node_features_loss
-            res["node_features_loss"] = nodes_node_features_loss.item()
+            node_features_loss = node_features_loss.mean()
+            loss += node_features_loss
+            res["node_features_loss"] = node_features_loss.item()
         
         if hasattr(batch, 'hyperedge_features'):
-            hyperedge_features_loss = hyperedge_features_loss[batch.reduction_level[batch.batch[batch.node_type == 0]] > 0].mean()
+            hyperedge_features_loss = hyperedge_features_loss.mean()
             loss += hyperedge_features_loss
             res["hyperedge_features_loss"] = hyperedge_features_loss.item()
             
         res["loss"] = loss.item()
-        
-        if hasattr(batch, 'node_features'):
-            edge_nodes_node_features_loss = edge_nodes_node_features_loss[batch.reduction_level[batch.batch[batch.node_type == 0]] > 0].mean()
-            loss += edge_nodes_node_features_loss
             
         return loss, res
 
@@ -428,7 +445,7 @@ class Expansion(Method):
         # construct augmented adjacency matrix
         adj_reduced_augmented = adj_reduced.copy()
         
-        if self.augmented_radius > 1:
+        if self.augmented_radius > 1 and self.augmented_dropout < 1:
             adj_reduced_square = (adj_reduced @ adj_reduced).set_diag(1)
             for _ in range(1, self.augmented_radius):
                 adj_reduced_augmented = adj_reduced_augmented @ adj_reduced_square
@@ -444,7 +461,7 @@ class Expansion(Method):
         )
         
         # drop out edges
-        if self.augmented_radius > 1:
+        if self.augmented_radius > 1 and self.augmented_dropout < 1:
             if self.augmented_dropout > 0.0:
                 row, col, val = adj_augmented.coo()
                 edge_mask = th.rand_like(val) >= self.augmented_dropout
@@ -460,94 +477,11 @@ class Expansion(Method):
                     sparse_sizes=adj_augmented.sizes(),
                 )
             else:
-                adj_augmented.values().fill_(1)
+                adj_augmented.set_value(
+                    th.ones(adj_augmented.nnz(), device=self.device), layout="coo"
+                )
                 
         return adj_augmented
-
-    def int_to_coords(self, n):
-        """Embeds node cluster sizes in a 2D spiral."""
-        # Layer calculation: use the integer part of sqrt(n_batch) to find the layer
-        layer = th.floor((th.sqrt(n.float()) + 1) / 2)
-        
-        # Calculate layer start for each n
-        layer_start = (2 * layer - 1).pow(2)
-        side_length = 2 * layer  # Length of a side in the current layer
-        
-        # Offset from layer_start
-        offset = n - layer_start
-        
-        # Determine which side and position within the side
-        side = offset // side_length
-        pos = offset % side_length
-        
-        # Initialize coordinates
-        x, y = th.zeros_like(n, dtype=th.float), th.zeros_like(n, dtype=th.float)
-        
-        # Top side: moving right
-        mask_top = side == 0
-        x[mask_top] = -layer[mask_top] + 1 + pos[mask_top]
-        y[mask_top] = -layer[mask_top]
-        
-        # Right side: moving down
-        mask_right = side == 1
-        x[mask_right] = layer[mask_right]
-        y[mask_right] = -layer[mask_right] + 1 + pos[mask_right]
-        
-        # Bottom side: moving left
-        mask_bottom = side == 2
-        x[mask_bottom] = layer[mask_bottom] - 1 - pos[mask_bottom]
-        y[mask_bottom] = layer[mask_bottom]
-        
-        # Left side: moving up
-        mask_left = side == 3
-        x[mask_left] = -layer[mask_left]
-        y[mask_left] = layer[mask_left] - 1 - pos[mask_left]
-        
-        # Normalize
-        s = 6
-        x = x.float() / s
-        y = y.float() / s
-        
-        return th.stack((x, y), dim=1)
-
-    def coords_to_int(self, coords):
-        """Recovers the original integer from coordinates in the spiral."""
-        # Reverse the normalization
-        s = 6
-        x = (coords[:, 0] * s).round().long()  # Round to the nearest integer to address floating-point precision issues
-        y = (coords[:, 1] * s).round().long()
-        
-        # Calculate the layer of the spiral based on the absolute values of x and y
-        layer = th.max(th.abs(x), th.abs(y))
-        layer_start = (2 * layer - 1).pow(2)
-        side_length = 2 * layer
-        
-        # Initialize the side and offset tensors
-        side = th.zeros_like(x)
-        offset = th.zeros_like(x)
-        
-        # Top side: moving right
-        mask_top = th.isclose(y, -layer)
-        offset[mask_top] = x[mask_top] + layer[mask_top]
-        side[mask_top] = 0
-        
-        # Right side: moving down
-        mask_right = th.isclose(x, layer)
-        offset[mask_right] = side_length[mask_right] + (y[mask_right] + layer[mask_right])
-        side[mask_right] = 1
-        
-        # Bottom side: moving left
-        mask_bottom = th.isclose(y, layer)
-        offset[mask_bottom] = 2 * side_length[mask_bottom] + (layer[mask_bottom] - x[mask_bottom])
-        side[mask_bottom] = 2
-        
-        # Left side: moving up
-        mask_left = th.isclose(x, -layer)
-        offset[mask_left] = 3 * side_length[mask_left] + (layer[mask_left] - y[mask_left])
-        side[mask_left] = 3
-        
-        # Recover the original integers
-        return layer_start + offset
 
 
 def unbatch_adj(adj, batch, node_type, node_features, hyperedge_features) -> tuple:

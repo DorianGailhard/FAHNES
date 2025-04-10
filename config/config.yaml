@@ -23,7 +23,7 @@ reduction:
   max_red_frac: 0.3
   red_threshold: 16
   num_red_seqs: -1 # infinite
-  rand_lambda: 0.3 # 0 for no randomization
+  rand_lambda: 0.4 # 0 for no randomization
 
 spectral:
   num_features: 2
@@ -32,6 +32,7 @@ spectral:
 training:
   batch_size: 64
   lr: 1e-4
+  weight_decay: 0
   num_steps: -1 # infinite
   max_num_workers: 10
   log_interval: 100
@@ -40,28 +41,28 @@ training:
 
 validation:
   batch_size: null
-  interval: 50_000
-  first_step: 50_000
+  interval: 10_000
+  first_step: 10_000
   per_hypergraph_size: False
 
 testing: False # if True, only evaluate on test set
 
 model:
   name: ppgn
-  node_emb_features: 64
-  hyperedge_emb_features: 64
-  expansion_emb_features: 64
+  node_emb_features: 32
+  hyperedge_emb_features: 32
+  expansion_emb_features: 32
   hidden_features: 256
-  ppgn_features: 256
+  ppgn_features: 128
   num_layers: 10
   dropout: 0.1
 
 sign_net:
   hidden_features: 128
-  num_layers: 10
+  num_layers: 5
 
 ema:
-  betas: [0.99, 0.999, 0.9999, 1]
+  betas: [0.99]
   gamma: 1
   power: 0.67
 

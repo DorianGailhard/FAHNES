@@ -85,10 +85,11 @@ def get_expansion_items(cfg: DictConfig, train_hypergraphs):
             hyperedge_in_features=cfg.dataset.hyperedge_features_dim,
             hyperedge_out_features=cfg.dataset.hyperedge_features_dim,
             hyperedge_emb_features=cfg.model.hyperedge_emb_features,
-            expansion_node_in_features=3,
-            expansion_edge_node_in_features=3,
+            expansion_node_in_features=2,
+            expansion_edge_node_in_features=1,
             expansion_edge_in_features=1,
-            expansion_node_out_features=3,
+            expansion_node_out_features=2,
+            expansion_edge_node_out_features=1,
             expansion_edge_out_features=1,
             expansion_emb_features=cfg.model.expansion_emb_features,
             hidden_features=cfg.model.hidden_features,
@@ -156,8 +157,8 @@ def main(cfg: DictConfig):
             dataset = pickle.load(f)
         
         train_hypergraphs = dataset["train"]
-        validation_hypergraphs = dataset["val"]
-        test_hypergraphs = dataset["test"]
+        validation_hypergraphs = dataset["val"]*5
+        test_hypergraphs = dataset["test"]*5
     elif cfg.dataset.name == "hypergraphErdosRenyi":
         train_hypergraphs = gg.data.generate_erdos_renyi_hypergraphs(
             num_hypergraphs=cfg.dataset.train_size,
@@ -196,9 +197,19 @@ def main(cfg: DictConfig):
         gg.metrics.CentralityCloseness(),
         gg.metrics.CentralityBetweenness(),
         gg.metrics.CentralityHarmonic(),
-        gg.metrics.Uniqueness(),
-        gg.metrics.Novelty(),
     ]
+    
+    if not "QM9" in cfg.dataset.name:
+        validation_metrics += [
+            gg.metrics.Uniqueness(),
+            gg.metrics.Novelty(),
+        ]
+    else:
+        validation_metrics += [
+            gg.metrics.ValidMolecule(),
+            gg.metrics.UniqueMolecule(),
+            gg.metrics.NovelMolecule(),
+        ]
     
     if "hypergraphEgo" in cfg.dataset.name:
         validation_metrics += [gg.metrics.ValidEgo(),
@@ -216,12 +227,6 @@ def main(cfg: DictConfig):
     if "shapeNet" in cfg.dataset.name:
         validation_metrics += [gg.metrics.ChamferDistance(),
         ]
-    
-    """if cfg.dataset.node_features_dim != 0:
-        validation_metrics += [gg.metrics.NodeFeaturesWasserstein()]
-
-    if cfg.dataset.hyperedge_features_dim != 0:
-        validation_metrics += [gg.metrics.HyperedgeFeaturesWasserstein()]"""
 
     # Method
     if cfg.method.name == "expansion":

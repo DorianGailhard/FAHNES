@@ -10,9 +10,12 @@ import torch as th
 from hydra.core.hydra_config import HydraConfig
 from matplotlib.figure import Figure
 from omegaconf import OmegaConf
-from torch.optim import Adam
+from torch.optim import AdamW
+
 from scipy.spatial import ConvexHull
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection, Line3DCollection
+from rdkit import Chem
+from rdkit.Chem import Draw
 
 import wandb
 
@@ -45,7 +48,7 @@ class Trainer:
         self.method = method.to(self.device)
         self.sign_net = sign_net.to(self.device) if sign_net is not None else None
         self.model = model.to(self.device)
-        self.optimizer = Adam(self.model.parameters(), cfg.training.lr)
+        self.optimizer = AdamW(self.model.parameters(), cfg.training.lr, weight_decay=cfg.training.weight_decay)
 
         # EMA
         self.ema_models = {
@@ -262,11 +265,8 @@ class Trainer:
         model = self.ema_models[beta]
         sign_net = self.ema_sign_nets[beta]
 
-        # Shuffle prediction order to make size distribution more uniform
-        pred_perm = self.rng.permutation(np.arange(len(eval_hypergraphs)))
-
         # Select target number of nodes and split into batches
-        target_size = np.array([len(g.nodes) for g in eval_hypergraphs])[pred_perm]
+        target_size = np.array([len(g.nodes) for g in eval_hypergraphs])
         bs = (
             self.cfg.validation.batch_size
             if self.cfg.validation.batch_size is not None
@@ -279,14 +279,18 @@ class Trainer:
         # Generate hypergraphs
         pred_hypergraphs = []
         for batch in batches:
-            pred_hypergraphs += self.method.sample_hypergraphs(
+            hypergraphs = self.method.sample_hypergraphs(
                 target_size=th.tensor(batch, device=self.device),
                 model=model,
                 sign_net=sign_net,
                 node_features_dim=self.node_features_dim,
                 hyperedge_features_dim=self.hyperedge_features_dim,
             )
-        results["pred_hypergraphs"] = [pred_hypergraphs[i] for i in pred_perm]
+            
+            pred_hypergraphs += hypergraphs
+        
+        results["pred_hypergraphs"] = pred_hypergraphs
+        
         if self.device == "cuda":
             th.cuda.empty_cache()
 
@@ -423,6 +427,48 @@ class Trainer:
                 ax.set_xlim(pos_min, pos_max)
                 ax.set_ylim(pos_min, pos_max)
                 ax.set_zlim(pos_min, pos_max)
+                
+                # Title
+                ax.title.set_text(f"N = {len(H.nodes)}")
+                ax.title.set_fontsize(40)
+        elif self.cfg.dataset.visualization == 'molecule':
+            n = min(4, len(self.validation_hypergraphs)) // 2
+            fig, axs = plt.subplots(n, 2, figsize=(50, 50))
+            
+            atom_types = {1: 0, 6: 1, 7: 2, 8: 3, 9: 4}  # H, C, N, O, F
+            atom_types_decode = {v: k for k, v in atom_types.items()}
+
+            bond_types = [Chem.rdchem.BondType.SINGLE,  
+                      Chem.rdchem.BondType.DOUBLE,  
+                      Chem.rdchem.BondType.TRIPLE,  
+                      Chem.rdchem.BondType.AROMATIC]
+            
+            for i in range(n * n):
+                ax = axs[i // n, i % n]
+                H = pred_hypergraphs[i]
+                
+                mol = Chem.RWMol()
+                node_to_atom = {}
+                
+                for node in H.nodes:
+                    one_hot = H.nodes[node].feature
+                    atom_type = atom_types_decode[np.argmax(one_hot)]
+                    if atom_type is not None:
+                        atom = Chem.Atom(atom_type)
+                        atom.SetNoImplicit(True)
+                        atom_idx = mol.AddAtom(atom)
+                        node_to_atom[node] = atom_idx
+                
+                for edge in H.edges:
+                    nodes = list(H.edges[edge])
+                    if len(nodes) == 2 and mol.GetBondBetweenAtoms(node_to_atom[nodes[0]], node_to_atom[nodes[1]]) is None: 
+                        mol.AddBond(node_to_atom[nodes[0]], node_to_atom[nodes[1]], 
+                                    bond_types[np.argmax(H.edges[edge].feature)])
+                
+                # Display the molecule
+                img = Draw.MolToImage(mol, size=(500, 500))
+                ax.imshow(img)
+                ax.axis('off')
                 
                 # Title
                 ax.title.set_text(f"N = {len(H.nodes)}")

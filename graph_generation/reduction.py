@@ -24,7 +24,7 @@ class Reduction(ABC):
     red_threshold: int
     rand_lambda: int
 
-    def __init__(self, bipartite_adj, clique_adj, node_features, hyperedge_features, node_cluster_size=None, edge_cluster_size=None, lap=None, B=None, expansion_matrix=None, level=0):
+    def __init__(self, bipartite_adj, clique_adj, node_features, hyperedge_features, node_cluster_size=None, edge_cluster_size=None, lap=None, B=None, expansion_matrix=None, expansion_matrix_nodes=None, expansion_matrix_hyperedges=None, level=0):
         self.bipartite_adj = bipartite_adj
         self.clique_adj = clique_adj
         self.n = clique_adj.shape[0]
@@ -59,6 +59,8 @@ class Reduction(ABC):
             self.A = self.get_A()
 
         self.expansion_matrix = expansion_matrix
+        self.expansion_matrix_nodes = expansion_matrix_nodes
+        self.expansion_matrix_hyperedges = expansion_matrix_hyperedges
         self.node_expansion = (
             np.ones(self.n, dtype=np.int32)
             if expansion_matrix is None
@@ -70,10 +72,10 @@ class Reduction(ABC):
             else expansion_matrix.sum(0)[self.n:].astype(np.int32)
         )
         self.level = level
-
+        
     def get_reduced_hypergraph(self, rng=np.random.default_rng()):
         # Compute the coarsened clique representation
-        C, collapsed_coarsened_incidence, edge_lifting_matrix = self.get_coarsening_matrix(rng)
+        C, collapsed_coarsened_incidence, edge_expansion_matrix = self.get_coarsening_matrix(rng)
         
         # P_inv = C.T with all non-zero entries set to 1
         P_inv = C.T.astype(bool).astype(C.dtype)
@@ -103,57 +105,49 @@ class Reduction(ABC):
         bottom = hstack([collapsed_coarsened_incidence.T, zero_hyperedges])
         bipartite_adjacency = csc_array(vstack([top, bottom]))
         
-        # Add the edge_lifting_matrix to the expansion matrix
-        expansion_matrix = bmat([[P_inv, None], [None, edge_lifting_matrix]], format='coo')
+        # Add the edge_expansion_matrix to the expansion matrix
+        expansion_matrix = bmat([[P_inv, None], [None, edge_expansion_matrix]], format='coo')
         
         # Compute coarsened features and new cluster sizes
         node_cluster_size = np.atleast_1d(P_inv.T @ self.node_cluster_size)  # (k,)
+        
         node_features = None
         if self.node_features is not None:
-            # Step 1: Weight the features by the current node_cluster_size
-            broadcast_shape = self.node_cluster_size.shape + (1,) * (self.node_features.ndim - 1)
-            weighted_features = self.node_features * self.node_cluster_size.reshape(broadcast_shape)
+            # Reshape weighted features to 2D for sparse matrix multiplication
+            original_shape = self.node_features.shape
+            reshaped_features = self.node_features.reshape((original_shape[0], -1))  # (n, d1*d2*...)
+            
+            # Weight the features by the current node_cluster_size
+            weighted_features = reshaped_features * self.node_cluster_size[:, None]
     
-            # Step 2: Reshape weighted features to 2D for sparse matrix multiplication
-            original_shape = weighted_features.shape
-            reshaped_weighted_features = weighted_features.reshape((original_shape[0], -1))  # (n, d1*d2*...)
-    
-            # Sparse matrix multiplication i.e. sum features of the nodes inside each cluster
-            summed_weighted_features = P_inv.T @ reshaped_weighted_features  # (k, d1*d2*...)
+            # Sum features of the nodes inside each cluster
+            summed_weighted_features = P_inv.T @ weighted_features  # (k, d1*d2*...)
+            
+            # Compute weighted average features
+            node_features = summed_weighted_features / node_cluster_size[:, None]
     
             # Reshape back to the original feature dimensions
-            summed_weighted_features = summed_weighted_features.reshape((P_inv.T.shape[0],) + original_shape[1:])  # (k, d1, d2, ...)
-    
-            # Step 3: Reshape summed weights for broadcasting and compute weighted average features
-            summed_weights_reshaped = node_cluster_size.reshape((-1,) + (1,) * (summed_weighted_features.ndim - 1))
-            node_features = summed_weighted_features / summed_weights_reshaped # + np.random.rand(*summed_weighted_features.shape) * np.sqrt(1/summed_weighted_features.shape[0])
+            summed_weighted_features = summed_weighted_features.reshape((P_inv.shape[1],) + original_shape[1:])  # (k, d1, d2, ...)
             
-            
-        edge_cluster_size = None
+        edge_cluster_size = np.atleast_1d(edge_expansion_matrix.T @ self.edge_cluster_size)  # (k,)
         hyperedge_features = None
         if self.hyperedge_features is not None:
-            # Step 1: Weight the features by the current node_cluster_size
-            broadcast_shape = self.edge_cluster_size.shape + (1,) * (self.hyperedge_features.ndim - 1)
-            weighted_features = self.hyperedge_features * self.edge_cluster_size.reshape(broadcast_shape)
+            # Reshape weighted features to 2D for sparse matrix multiplication
+            original_shape = self.hyperedge_features.shape
+            reshaped_features = self.hyperedge_features.reshape((original_shape[0], -1))  # (n, d1*d2*...)
+            
+            # Weight the features by the current node_cluster_size
+            weighted_features = reshaped_features * self.edge_cluster_size[:, None]
     
-            # Step 2: Reshape weighted features to 2D for sparse matrix multiplication
-            original_shape = weighted_features.shape
-            reshaped_weighted_features = weighted_features.reshape((original_shape[0], -1))  # (n, d1*d2*...)
-    
-            # Sparse matrix multiplication i.e. sum features of the nodes inside each cluster
-            summed_weighted_features = edge_lifting_matrix.T @ reshaped_weighted_features  # (k, d1*d2*...)
+            # Sum features of the nodes inside each cluster
+            summed_weighted_features = edge_expansion_matrix.T @ weighted_features  # (k, d1*d2*...)
+            
+            # Compute weighted average features
+            hyperedge_features = summed_weighted_features / edge_cluster_size[:, None]
     
             # Reshape back to the original feature dimensions
-            summed_weighted_features = summed_weighted_features.reshape((edge_lifting_matrix.T.shape[0],) + original_shape[1:])  # (k, d1, d2, ...)
-    
-            # Step 3: Compute the sum of weights for each cluster
-            edge_cluster_size = np.atleast_1d(edge_lifting_matrix.T @ self.edge_cluster_size)  # (k,)
-    
-            # Step 4: Reshape summed weights for broadcasting and compute weighted average features
-            summed_weights_reshaped = edge_cluster_size.reshape((-1,) + (1,) * (summed_weighted_features.ndim - 1))
-            hyperedge_features = summed_weighted_features / summed_weights_reshaped #+ np.random.rand(*summed_weighted_features.shape) * np.sqrt( (1/summed_weighted_features.shape[0]) * (1/2)**(summed_weighted_features.shape[0] + 1) )
-        
-        
+            summed_weighted_features = summed_weighted_features.reshape((edge_expansion_matrix.shape[1],) + original_shape[1:])  # (k, d1, d2, ...)
+            
         return self.__class__(
             bipartite_adj=bipartite_adjacency,
             clique_adj=adj_clique_reduced,
@@ -164,6 +158,8 @@ class Reduction(ABC):
             lap=lap_reduced,
             B=C @ self.B,
             expansion_matrix=expansion_matrix,
+            expansion_matrix_nodes=P_inv,
+            expansion_matrix_hyperedges=edge_expansion_matrix,
             level=self.level + 1,
         )
 
@@ -192,7 +188,7 @@ class Reduction(ABC):
         d_inv_sqrt[mask] = 0
         return self.B @ np.diag(d_inv_sqrt) @ V
     
-    def collapse_duplicate_edges(self, coarsened_incidence: csc_array, edge_lifting_matrix: csc_array):
+    def collapse_duplicate_edges(self, coarsened_incidence: csc_array, edge_expansion_matrix: csc_array):
         unique_columns = {}
         column_map = {}
         next_col_index = 0
@@ -205,14 +201,14 @@ class Reduction(ABC):
             col = tuple(coarsened_incidence.indices[start:end])
     
             if col in unique_columns:
-                start_lifting, end_lifting = edge_lifting_matrix.indptr[col_index], edge_lifting_matrix.indptr[col_index+1]
-                mergings[unique_columns[col]].extend(edge_lifting_matrix.indices[start_lifting:end_lifting])
+                start_lifting, end_lifting = edge_expansion_matrix.indptr[col_index], edge_expansion_matrix.indptr[col_index+1]
+                mergings[unique_columns[col]].extend(edge_expansion_matrix.indices[start_lifting:end_lifting])
             else:
                 unique_columns[col] = next_col_index
                 column_map[col_index] = next_col_index
                 
-                start_lifting, end_lifting = edge_lifting_matrix.indptr[col_index], edge_lifting_matrix.indptr[col_index+1]
-                mergings[next_col_index] = list(edge_lifting_matrix.indices[start_lifting:end_lifting])
+                start_lifting, end_lifting = edge_expansion_matrix.indptr[col_index], edge_expansion_matrix.indptr[col_index+1]
+                mergings[next_col_index] = list(edge_expansion_matrix.indices[start_lifting:end_lifting])
                 next_col_index += 1
     
         # Construct the collapsed incidence matrix
@@ -231,7 +227,7 @@ class Reduction(ABC):
         
         # Create the collapsed matrices
         collapsed_incidence_matrix = csc_array((np.ones(incidence_collapsed_indptr[-1], dtype=int), incidence_collapsed_rows, incidence_collapsed_indptr), shape=(coarsened_incidence.shape[0], next_col_index))
-        collapsed_lifting_matrix = csc_array((np.ones(lifting_collapsed_indptr[-1], dtype=int), lifting_collapsed_rows, lifting_collapsed_indptr), shape=(edge_lifting_matrix.shape[0], next_col_index))
+        collapsed_lifting_matrix = csc_array((np.ones(lifting_collapsed_indptr[-1], dtype=int), lifting_collapsed_rows, lifting_collapsed_indptr), shape=(edge_expansion_matrix.shape[0], next_col_index))
     
         return collapsed_incidence_matrix, collapsed_lifting_matrix
     
@@ -281,12 +277,12 @@ class Reduction(ABC):
         marked = np.zeros(self.n, dtype=bool)
         
         incidence_matrix = csc_array(self.bipartite_adj [:self.n, self.n:])
-        edge_lifting_matrix = eye(incidence_matrix.shape[1], format='csc')
+        edge_expansion_matrix = eye(incidence_matrix.shape[1], format='csc')
         
         # As we dynamically reduce the incidence matrix, the indices in the
         # contraction_set do not correspond to those of the matrix
         index_map = np.arange(incidence_matrix.shape[0])
-        
+
         for contraction_set in contraction_sets:
             if (
                 not marked[contraction_set].any()
@@ -313,11 +309,11 @@ class Reduction(ABC):
                 coarsened_incidence = csc_array((np.ones(new_indptr[-1], dtype=int), new_indices, new_indptr), shape=(incidence_matrix.shape[0] - len(index_map_contraction_set)+1, incidence_matrix.shape[1]))
                 
                 # Then merge the hyperedges  
-                collapsed_coarsened_incidence, new_edge_lifting_matrix = self.collapse_duplicate_edges(coarsened_incidence, edge_lifting_matrix)
+                collapsed_coarsened_incidence, new_edge_expansion_matrix = self.collapse_duplicate_edges(coarsened_incidence, edge_expansion_matrix)
 
-                if new_edge_lifting_matrix.sum(0).max() <= 3:
+                if new_edge_expansion_matrix.sum(0).max() <= 3:
                     incidence_matrix = collapsed_coarsened_incidence
-                    edge_lifting_matrix = new_edge_lifting_matrix
+                    edge_expansion_matrix = new_edge_expansion_matrix
                     partitions.append(contraction_set)
                     marked[contraction_set] = True
                     
@@ -337,7 +333,7 @@ class Reduction(ABC):
             P[partition[0], partition] = 1 / size
             mask[partition[1:]] = False
         P = P[mask, :]
-        return coo_array(P, dtype=np.float64), incidence_matrix, edge_lifting_matrix
+        return coo_array(P, dtype=np.float64), incidence_matrix, coo_array(edge_expansion_matrix, dtype=np.float64)
 
 
     @abstractmethod

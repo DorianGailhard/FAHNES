@@ -9,9 +9,6 @@ from torch_geometric.typing import SparseTensor
 
 from ..reduction import ReductionFactory
 
-import pickle
-import sys
-
 class RandRedDataset(IterableDataset, ABC):
     def __init__(self, hypergraphs, red_factory: ReductionFactory, spectrum_extractor):
         super().__init__()
@@ -22,7 +19,7 @@ class RandRedDataset(IterableDataset, ABC):
 
     def get_random_reduction_sequence(self, reduction_level_zero, rng):
         data = []
-        red = reduction_level_zero.get_reduced_hypergraph(rng)
+        red = reduction_level_zero
         red_next = red.get_reduced_hypergraph(rng)
         
         while True:
@@ -34,26 +31,33 @@ class RandRedDataset(IterableDataset, ABC):
             node_type_reduced = np.zeros(red_next.bipartite_adj.shape[0])
             node_type_reduced[:red_next.n] = 1
             
+            diff_node_features = None
+            diff_hyperedge_features = None
             if reduced_hypergraph.node_features is not None or reduced_hypergraph.hyperedge_features is not None:
-                expansion_numbers = np.sum(reduced_hypergraph.expansion_matrix, axis=0).astype(np.int64)
-            
                 if reduced_hypergraph.node_features is not None:
-                    node_map = np.repeat(np.arange(reduced_hypergraph.n), expansion_numbers[:reduced_hypergraph.n])
+                    # Reshape features to 2D for sparse matrix multiplication
+                    original_shape = reduced_hypergraph.node_features.shape
+                    reshaped_features = reduced_hypergraph.node_features.reshape((original_shape[0], -1))  # (n, d1*d2*...)
                     
-                    diff_node_features = np.abs(reduced_hypergraph.node_features[node_map] - red_next.node_features)
-                else:
-                    diff_node_features = None
+                    node_features_reduced = reduced_hypergraph.expansion_matrix_nodes @ reshaped_features
+                    
+                    # Reshape back to the original feature dimensions
+                    node_features_reduced = node_features_reduced.reshape((reduced_hypergraph.expansion_matrix_nodes.shape[0],) + original_shape[1:])  # (k, d1, d2, ...)
+                    
+                    diff_node_features = np.abs(node_features_reduced - red_next.node_features)
                 
                 if reduced_hypergraph.hyperedge_features is not None:
-                    edge_node_map = np.repeat(np.arange(reduced_hypergraph.expansion_matrix.shape[0] - reduced_hypergraph.n), expansion_numbers[reduced_hypergraph.n:])
+                    # Reshape features to 2D for sparse matrix multiplication
+                    original_shape = reduced_hypergraph.hyperedge_features.shape
+                    reshaped_features = reduced_hypergraph.hyperedge_features.reshape((original_shape[0], -1))  # (n, d1*d2*...)
                     
-                    diff_hyperedge_features = np.abs(reduced_hypergraph.hyperedge_features[edge_node_map] - red_next.hyperedge_features)
-                else:
-                    diff_hyperedge_features = None
-            else:
-                diff_node_features = None
-                diff_hyperedge_features = None
-            
+                    hyperedge_features_reduced = reduced_hypergraph.expansion_matrix_hyperedges @ reshaped_features
+                    
+                    # Reshape back to the original feature dimensions
+                    hyperedge_features_reduced = hyperedge_features_reduced.reshape((reduced_hypergraph.expansion_matrix_hyperedges.shape[0],) + original_shape[1:])  # (k, d1, d2, ...)
+                    
+                    diff_hyperedge_features = np.abs(hyperedge_features_reduced - red_next.hyperedge_features)
+
             data.append(
                 ReducedGraphData(
                     target_size=reduction_level_zero.n,
@@ -73,32 +77,19 @@ class RandRedDataset(IterableDataset, ABC):
                     hyperedge_features_reduced=red_next.hyperedge_features,
                     hyperedge_features_diff=diff_hyperedge_features,
                     expansion_matrix=red_next.expansion_matrix,
+                    expansion_matrix_nodes=red_next.expansion_matrix_nodes,
+                    expansion_matrix_hyperedges=red_next.expansion_matrix_hyperedges,
                     spectral_features_reduced=self.spectrum_extractor(red_next.bipartite_adj)
                     if self.spectrum_extractor is not None
                     else None,
                 )
             )
             
-            if red_next.n <= 1:
+            if red.n <= 1:
                 break
             
             red = red_next
             red_next = reduced_hypergraph
-            
-        """adjs = []
-        features = []
-        num_nodes = []
-        
-        for b in data:
-            adjs.append(b.adj.to_dense().cpu().numpy())
-            features.append(b.node_features.cpu().numpy())
-            num_nodes.append(th.sum(b.node_type).item())
-            
-            data = {"adj" : adjs, "features":features, "num_nodes":num_nodes}
-            
-        with open('data.pkl', 'wb') as file:
-            pickle.dump(data, file)
-        sys.exit("Sequence finished.")"""
 
         return data
 
@@ -159,7 +150,6 @@ class InfiniteRandRedDataset(RandRedDataset):
                     reds[i], rng
                 )
                 rng.shuffle(hypergraphs_reduced_data[i])
-
             yield hypergraphs_reduced_data[i].pop()
 
     @property

@@ -16,13 +16,13 @@ method:
   features_noise_perturbation: 0.5
  
 reduction:
-  topological_cost_importance: 1.0
+  topological_cost_importance: 0
 
 training:
-  batch_size: 60
+  batch_size: 20
 
 validation:
-  batch_size: 20
+  batch_size: 10
 
 spectral:
   num_features: 2

@@ -26,6 +26,7 @@ class SparsePPGN(Module):
         expansion_edge_node_in_features: int,
         expansion_edge_in_features: int,
         expansion_node_out_features: int,
+        expansion_edge_node_out_features: int,
         expansion_edge_out_features: int,
         expansion_emb_features: int,
         hidden_features: int,
@@ -44,44 +45,41 @@ class SparsePPGN(Module):
             self.node_features = -1 # coding for no features
             self.node_features_dim = 0
             node_emb_features = 0
+            
+        if hyperedge_in_features != 0 and isinstance(hyperedge_in_features, int):
+            self.hyperedge_features = 0 # coding for vector feature
+            self.hyperedge_features_dim = hyperedge_in_features
+        else:
+            self.hyperedge_features = -1 # coding for no features
+            self.hyperedge_features_dim = 0
+            hyperedge_emb_features = 0
 
         # Embedding layers
-        self.node_emb_layer = Linear(expansion_node_in_features*(1+self_conditioning), expansion_emb_features)
-        self.edge_node_emb_layer = Linear(expansion_edge_node_in_features*(1+self_conditioning), expansion_emb_features)
-        self.edge_emb_layer = Linear(expansion_edge_in_features*(1+self_conditioning), expansion_emb_features)
+        self.node_emb_layer = Linear((expansion_node_in_features + self.node_features_dim)*(1+self_conditioning) + self.node_features_dim, expansion_emb_features + 2*node_emb_features)
+        self.edge_node_emb_layer = Linear((expansion_edge_node_in_features + self.hyperedge_features_dim)*(1+self_conditioning), expansion_emb_features + hyperedge_emb_features)
+        self.edge_emb_layer = Linear(expansion_edge_in_features*(1+self_conditioning), expansion_emb_features + node_emb_features + hyperedge_emb_features)
         self.noise_cond_emb_layer = Linear(1, expansion_emb_features)
         self.red_frac_emb_layer = Linear(1, expansion_emb_features)
-        self.target_size_emb_layer = PositionalEncoding(expansion_emb_features)
+        self.node_budget_emb_layer = PositionalEncoding(expansion_emb_features, base_freq=1e-4)
 
         # In layers
-        self.node_in_mlp = MLP(5 * expansion_emb_features + node_emb_features, [hidden_features, hidden_features])
-        self.edge_node_in_mlp = MLP(5 * expansion_emb_features + node_emb_features, [hidden_features, hidden_features])
-        self.edge_in_mlp = MLP(6 * expansion_emb_features + 2*node_emb_features, [hidden_features, hidden_features])
+        self.node_in_mlp = MLP(5 * expansion_emb_features + 2*node_emb_features, [hidden_features, hidden_features])
+        self.edge_node_in_mlp = MLP(4 * expansion_emb_features + hyperedge_emb_features, [hidden_features, hidden_features])
+        self.edge_in_mlp = MLP(5 * expansion_emb_features + node_emb_features + hyperedge_emb_features, [hidden_features, hidden_features])
 
         # GNN layers
         self.sparse_ppgn_layers = ModuleList(
             [SparsePPGNLayer(hidden_features, ppgn_features) for _ in range(num_layers)]
         )
         
-        # Out layers
-        self.node_out_layer = Linear(
-            (num_layers + 1) * hidden_features, expansion_node_out_features + node_out_features + hyperedge_out_features
-        )
-        self.edge_node_out_layer = Linear(
-            (num_layers + 1) * hidden_features, expansion_node_out_features + node_out_features + hyperedge_out_features
-        )
-        self.edge_out_layer = Linear(
-            (num_layers + 1) * hidden_features, expansion_edge_out_features
-        )
+        # Out layers        
+        self.node_out_layer = Linear((num_layers + 1) * hidden_features, expansion_node_out_features + node_out_features)
+        self.edge_node_out_layer = Linear((num_layers + 1) * hidden_features, expansion_edge_node_out_features + hyperedge_out_features)
+        self.edge_out_layer = Linear((num_layers + 1) * hidden_features, expansion_edge_out_features)
+
 
         # Dropout
         self.dropout = Dropout(dropout)
-        
-        # Features
-        if self.node_features == 0: # Vector features
-            # Embedding layers
-            self.features_node_emb_layer = Linear(node_in_features*(1+self_conditioning), node_emb_features)
-        
 
     def forward(
         self,
@@ -92,7 +90,9 @@ class SparsePPGN(Module):
         node_attr,
         edge_node_attr,
         edge_attr,
+        node_features_initial,
         node_features,
+        hyperedge_features,
         node_emb,
         edge_node_emb,
         noise_cond,
@@ -100,107 +100,67 @@ class SparsePPGN(Module):
         target_size,
     ):
         # Embedding
-        node_attr_emb = self.node_emb_layer(node_attr)#th.cat((node_cluster_size, node_attr), dim=1))
-        edge_node_attr_emb = self.edge_node_emb_layer(edge_node_attr)
         edge_attr_emb = self.edge_emb_layer(edge_attr)
         noise_cond_emb = self.noise_cond_emb_layer(noise_cond[..., None])
         red_frac_emb = self.red_frac_emb_layer(red_frac[..., None])
-        target_size_emb = self.target_size_emb_layer(target_size[..., None])
+        node_budget_emb = self.node_budget_emb_layer(node_cluster_size[..., None])
         
         if self.node_features == 0: # vector features
-            node_features_emb = self.features_node_emb_layer(node_features)
+            node_attr_emb = self.node_emb_layer(th.cat((node_attr, node_features, node_features_initial), dim=-1))
+        else:
+            node_attr_emb = self.node_emb_layer(node_attr)
+        
+        if self.hyperedge_features == 0: # vector features
+            edge_node_attr_emb = self.edge_node_emb_layer(th.cat((edge_node_attr, hyperedge_features), dim=-1))
+        else:
+            edge_node_attr_emb = self.edge_node_emb_layer(edge_node_attr)
         
         # Input
-        # Node features
-        if self.node_features == -1: # no features
-            x_node = th.cat(
-                [
-                    node_attr_emb,
-                    node_emb,
-                    noise_cond_emb[batch[node_type == 1]],
-                    red_frac_emb[batch[node_type == 1]],
-                    target_size_emb[batch[node_type == 1]],
-                ],
-                dim=-1,
-            )
-        elif self.node_features == 0: # vector features
-            x_node = th.cat(
-                [
-                    node_attr_emb,
-                    node_emb,
-                    noise_cond_emb[batch[node_type == 1]],
-                    red_frac_emb[batch[node_type == 1]],
-                    target_size_emb[batch[node_type == 1]],
-                    node_features_emb[node_type == 1]
-                ],
-                dim=-1,
-            )
+        # Nodes
+        x_node = [
+            node_attr_emb,
+            node_emb,
+            noise_cond_emb[batch[node_type == 1]],
+            red_frac_emb[batch[node_type == 1]],
+            node_budget_emb,
+        ]
+        
+        x_node = th.cat(x_node, dim=-1)
             
         x_node = self.dropout(x_node)
         x_node = self.node_in_mlp(x_node)
         
+        # Edge nodes
+        x_edge_node = [
+            edge_node_attr_emb,
+            edge_node_emb,
+            noise_cond_emb[batch[node_type == 0]],
+            red_frac_emb[batch[node_type == 0]],
+        ]
         
-        if self.node_features == -1: # no features
-            x_edge_node = th.cat(
-                [
-                    edge_node_attr_emb,
-                    edge_node_emb,
-                    noise_cond_emb[batch[node_type == 0]],
-                    red_frac_emb[batch[node_type == 0]],
-                    target_size_emb[batch[node_type == 0]],
-                ],
-                dim=-1,
-            )
-        elif self.node_features == 0: # vector features
-            x_edge_node = th.cat(
-                [
-                    edge_node_attr_emb,
-                    edge_node_emb,
-                    noise_cond_emb[batch[node_type == 0]],
-                    red_frac_emb[batch[node_type == 0]],
-                    target_size_emb[batch[node_type == 0]],
-                    node_features_emb[node_type == 0]
-                ],
-                dim=-1,
-            )
+        x_edge_node = th.cat(x_edge_node, dim=-1)
         
         x_edge_node = self.dropout(x_edge_node)
         x_edge_node = self.edge_node_in_mlp(x_edge_node)
         
-        
-        edge_batch = batch[edge_index[0]]
-        
+        # Edges
         all_nodes_emb = th.zeros(node_emb.size(0) + edge_node_emb.size(0), node_emb.size(1), device=node_emb.device)
         all_nodes_emb[node_type == 0] = edge_node_emb
         all_nodes_emb[node_type == 1] = node_emb
         
-        if self.node_features == -1: # no features
-            x_edge = th.cat(
-                [
-                    edge_attr_emb,
-                    all_nodes_emb[th.minimum(edge_index[0], edge_index[1])], # edge index is sorted so left side nodes always come first
-                    all_nodes_emb[th.maximum(edge_index[0], edge_index[1])],
-                    noise_cond_emb[edge_batch],
-                    red_frac_emb[edge_batch],
-                    target_size_emb[edge_batch],
-                ],
-                dim=-1,
-            )
-        else:
-            x_edge = th.cat(
-                [
-                    edge_attr_emb,
-                    all_nodes_emb[th.minimum(edge_index[0], edge_index[1])],
-                    all_nodes_emb[th.maximum(edge_index[0], edge_index[1])],
-                    noise_cond_emb[edge_batch],
-                    red_frac_emb[edge_batch],
-                    target_size_emb[edge_batch],
-                    node_features_emb[edge_index[0]],
-                    node_features_emb[edge_index[1]],
-                ],
-                dim=-1,
-            )
+        sorted_edge_min = th.minimum(edge_index[0], edge_index[1])
+        sorted_edge_max = th.maximum(edge_index[0], edge_index[1])
         
+        x_edge = [
+            edge_attr_emb,
+            all_nodes_emb[sorted_edge_min],
+            all_nodes_emb[sorted_edge_max],
+            noise_cond_emb[batch[sorted_edge_min]],
+            red_frac_emb[batch[sorted_edge_min]],
+        ]
+        
+        x_edge = th.cat(x_edge, dim=-1)
+                
         x_edge = self.dropout(x_edge)
         x_edge = self.edge_in_mlp(x_edge)            
 
@@ -291,7 +251,7 @@ class SparsePPGN(Module):
         out_node = self.node_out_layer(x[:n][node_type == 1])
         out_edge_node = self.edge_node_out_layer(x[:n][node_type == 0])
         out_edge = self.edge_out_layer(x[n:])
-
+        
         # make out_edge symmetric
         out_edge = coalesce(
             th.cat([edge_index, edge_index.flip(0)], dim=-1),
@@ -299,7 +259,7 @@ class SparsePPGN(Module):
             reduce="mean",
         )[1]
 
-        return out_node[:, self.node_features_dim:], out_edge_node[:, self.node_features_dim:], out_edge, out_node[:, :self.node_features_dim], out_edge_node[:, :self.node_features_dim]
+        return out_node[:, self.node_features_dim:], out_edge_node[:, self.hyperedge_features_dim:], out_edge, out_node[:, :self.node_features_dim], out_edge_node[:, :self.hyperedge_features_dim]
 
 
 class SparsePPGNLayer(Module):

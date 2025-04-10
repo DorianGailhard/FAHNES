@@ -1,0 +1,29 @@
+# @package _global_
+defaults:
+  - override /dataset: file
+  - override /diffusion: cfm
+  - _self_
+
+name: QM9
+
+dataset:
+  name: QM9
+  visualization: molecule
+  node_features_dim: 10
+  hyperedge_features_dim: 4
+
+method:
+  features_noise_perturbation: 0.5
+ 
+reduction:
+  topological_cost_importance: 0.5
+  preserved_eig_size: 2
+
+training:
+  batch_size: 100
+
+validation:
+  batch_size: 30
+
+spectral:
+  num_features: 2

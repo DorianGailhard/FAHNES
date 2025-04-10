@@ -1,3 +1,3 @@
 name: "cfm"
-num_steps: 256
+num_steps: 128
 self_conditioning: True

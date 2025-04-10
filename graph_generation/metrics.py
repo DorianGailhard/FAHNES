@@ -9,6 +9,10 @@ from collections import Counter
 from scipy.stats import wasserstein_distance
 from scipy.spatial.distance import cdist
 
+from rdkit import Chem
+
+from functools import cache
+
 from util.eval_helper import (
     spectral_stats,
     eval_fraction_unique,
@@ -250,28 +254,6 @@ class ValidSBM(Metric):
 
     def __call__(self, reference_hypergraphs, predicted_hypergraphs, train_hypergraphs):
         return eval_acc_sbm_hypergraph(predicted_hypergraphs)
-
-
-class NodeFeaturesWasserstein(Metric):
-    def __str__(self):
-        return "NodeFeaturesWasserstein"
-
-    def __call__(self, reference_hypergraphs, predicted_hypergraphs, train_hypergraphs):
-        predicted_features = [H.nodes[n].feature for H in predicted_hypergraphs for n in H.nodes]
-        reference_features = [H.nodes[n].feature for H in reference_hypergraphs for n in H.nodes]
-        
-        return wasserstein_distance(predicted_features, reference_features)
-    
-    
-class HyperedgeFeaturesWasserstein(Metric):
-    def __str__(self):
-        return "HyperedgeFeaturesWasserstein"
-
-    def __call__(self, reference_hypergraphs, predicted_hypergraphs, train_hypergraphs):
-        predicted_features = [H.edges[e].feature for H in predicted_hypergraphs for e in H.edges]
-        reference_features = [H.edges[e].feature for H in reference_hypergraphs for e in H.edges]
-        
-        return wasserstein_distance(predicted_features, reference_features)
     
 
 class ChamferDistance:
@@ -300,3 +282,126 @@ class ChamferDistance:
         chamfer_dist = np.mean(min_dist_x) + np.mean(min_dist_y)
 
         return chamfer_dist
+    
+
+def convert_to_mol(H):
+    """Convert a hypergraph to an rdkit Mol"""
+    # Convert node features to a hashable tuple
+    node_features = tuple(
+        (node, tuple(H.nodes[node].feature.tolist())) 
+        for node in H.nodes
+    )
+    
+    # Convert edge features to a hashable tuple
+    edge_features = tuple(
+        (tuple(list(H.edges[edge])), tuple(H.edges[edge].feature.tolist())) 
+        for edge in H.edges
+    )
+    
+    return convert_cached_hypergraph_to_mol(node_features, edge_features)
+
+
+atom_types = {1: 0, 6: 1, 7: 2, 8: 3, 9: 4}  # H, C, N, O, F
+atom_types_decode = {v: k for k, v in atom_types.items()}
+
+bond_types = [Chem.rdchem.BondType.SINGLE,  
+              Chem.rdchem.BondType.DOUBLE,  
+              Chem.rdchem.BondType.TRIPLE,  
+              Chem.rdchem.BondType.AROMATIC]
+
+@cache
+def convert_cached_hypergraph_to_mol(node_features, edge_features):
+    """Convert cached hypergraph representation to RDKit molecule"""    
+    mol = Chem.RWMol()
+    node_to_atom = {}
+    
+    # Add atoms
+    for node, feature in node_features:
+        atom_type = atom_types_decode[np.argmax(feature)]
+        atom = Chem.Atom(atom_type)
+        atom.SetNoImplicit(True)
+        atom_idx = mol.AddAtom(atom)
+        node_to_atom[node] = atom_idx
+    
+    # Add bonds
+    for (nodes, feature) in edge_features:
+        if len(nodes) == 2:
+            if mol.GetBondBetweenAtoms(node_to_atom[nodes[0]], node_to_atom[nodes[1]]) is None:
+                mol.AddBond(
+                    node_to_atom[nodes[0]], 
+                    node_to_atom[nodes[1]], 
+                    bond_types[np.argmax(feature)]
+                )
+    
+    return mol
+
+
+def check_valency(mol):
+    """Check if all atoms have the correct valency, assuming explicit hydrogens."""
+    for atom in mol.GetAtoms():
+        valence = atom.GetExplicitValence()
+        atomic_num = atom.GetAtomicNum()
+        expected_valence = Chem.GetPeriodicTable().GetDefaultValence(atomic_num)
+        
+        if valence != expected_valence:
+            return False  # Incorrect valency
+    
+    return True
+
+class ValidMolecule(Metric):
+    def __str__(self):
+        return "ValidMolecule"
+        
+    def __call__(self, reference_hypergraphs, predicted_hypergraphs, train_hypergraphs):
+        valid_count = 0
+        total = len(predicted_hypergraphs)
+        
+        for H in predicted_hypergraphs:
+            if H.is_connected():
+                mol = convert_to_mol(H)
+                if not mol:
+                    continue
+
+                try:
+                    Chem.SanitizeMol(mol)
+                except:
+                    continue
+
+                if check_valency(mol):
+                    valid_count += 1
+                
+        return valid_count / total if total > 0 else 0
+
+class UniqueMolecule(Metric):
+    def __str__(self):
+        return "UniqueMolecule"
+        
+    def __call__(self, reference_hypergraphs, predicted_hypergraphs, train_hypergraphs):
+        smiles_set = set()
+        total = len(predicted_hypergraphs)
+        
+        for H in predicted_hypergraphs:
+            mol = convert_to_mol(H)
+            smiles = Chem.MolToSmiles(mol)
+            smiles_set.add(smiles)
+        
+        unique_count = len(smiles_set)
+        return unique_count / total if total > 0 else 0
+
+class NovelMolecule(Metric):
+    def __str__(self):
+        return "NovelMolecule"
+        
+    def __call__(self, reference_hypergraphs, predicted_hypergraphs, train_hypergraphs):
+        smiles_set = set()
+        train_smiles_set = set(Chem.MolToSmiles(convert_to_mol(H)) for H in train_hypergraphs if convert_to_mol(H))
+        total = len(predicted_hypergraphs)
+        
+        for H in predicted_hypergraphs:
+            mol = convert_to_mol(H)
+            smiles = Chem.MolToSmiles(mol)
+            if smiles not in train_smiles_set and smiles is not None:
+                smiles_set.add(smiles)
+        
+        novel_count = len(smiles_set)
+        return novel_count / total if total > 0 else 0
