@@ -11,9 +11,6 @@ dataset:
   visualization: hypergraph
   node_features_dim: 0
   hyperedge_features_dim: 0
-  
-method:
-  features_noise_perturbation: 0
  
 reduction:
   topological_cost_importance: 1
@@ -25,4 +22,4 @@ validation:
   batch_size: 64
 
 spectral:
-  num_features: 2
+  num_eigenvectors: 2

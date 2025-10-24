@@ -8,7 +8,6 @@ import numpy as np
 
 from .method import Method
 
-
 class Expansion(Method):
     """Hypergraph generation method generating graphs by local expansion."""  
 
@@ -16,25 +15,31 @@ class Expansion(Method):
         self,
         diffusion,
         spectrum_extractor,
-        emb_features,
+        emb_dim,
         augmented_radius=1,
         augmented_dropout=0.0,
         deterministic_expansion=False,
         min_red_frac=0.0,
         max_red_frac=0.5,
         red_threshold=0,
-        features_noise_perturbation=0
+        node_features_noise_strength=0,
+        node_features_on_simplex=False,
+        hyperedge_features_noise_strength=0,
+        hyperedge_features_on_simplex=False
     ):
         self.diffusion = diffusion
         self.spectrum_extractor = spectrum_extractor
-        self.emb_features = emb_features
+        self.emb_dim = emb_dim
         self.augmented_radius = augmented_radius
         self.augmented_dropout = augmented_dropout
         self.deterministic_expansion = deterministic_expansion
         self.min_red_frac = min_red_frac
         self.max_red_frac = max_red_frac
         self.red_threshold = red_threshold
-        self.features_noise_perturbation = features_noise_perturbation
+        self.node_features_noise_strength = node_features_noise_strength
+        self.node_features_on_simplex = node_features_on_simplex
+        self.hyperedge_features_noise_strength = hyperedge_features_noise_strength
+        self.hyperedge_features_on_simplex = hyperedge_features_on_simplex
 
     def sample_hypergraphs(self, target_size, model: Module, sign_net: Module, node_features_dim: tuple, hyperedge_features_dim: tuple):
         """Samples a batch of hypergraphs."""
@@ -59,7 +64,7 @@ class Expansion(Method):
             node_features = th.zeros((num_hypergraphs,) + (node_features_dim if isinstance(node_features_dim, tuple) else (node_features_dim,)), device=self.device, dtype=th.float32)
             
         if hyperedge_features_dim:
-            hyperedge_features = th.zeros((num_hypergraphs,) + (hyperedge_features_dim if isinstance(hyperedge_features_dim, tuple) else (hyperedge_features_dim,)), device=self.device)
+            hyperedge_features = th.zeros((num_hypergraphs,) + (hyperedge_features_dim if isinstance(hyperedge_features_dim, tuple) else (hyperedge_features_dim,)), device=self.device, dtype=th.float32)
         
         while node_type.sum() < target_size.sum():
             adj, batch, node_expansion, node_type, node_features, hyperedge_features, node_cluster_size = self.expand(
@@ -134,7 +139,6 @@ class Expansion(Method):
     ):
         """Expands a hypergraph by a single level."""
         # expand
-        # don't expand nodes that doesn't have any budget left
         all_node_map = th.repeat_interleave(
             th.arange(0, adj_reduced.size(0), device=self.device), node_expansion
         )
@@ -143,7 +147,7 @@ class Expansion(Method):
             th.arange(0, th.sum(node_type), device=self.device), node_expansion[node_type == 1]
         )
         
-        edge_node_map = th.repeat_interleave(
+        hyperedge_map = th.repeat_interleave(
             th.arange(0, node_type.size(0) - th.sum(node_type), device=self.device), node_expansion[node_type == 0]
         )
         
@@ -158,7 +162,7 @@ class Expansion(Method):
             expanded_node_features = node_features[node_map]
         
         if hyperedge_features is not None:
-            expanded_hyperedge_features = hyperedge_features[edge_node_map]
+            expanded_hyperedge_features = hyperedge_features[hyperedge_map]
         
         size = scatter(expanded_node_type, batch)
         expansion_matrix = SparseTensor(
@@ -167,7 +171,7 @@ class Expansion(Method):
             value=th.ones(all_node_map.size(0), device=self.device),
         )
         adj_augmented = self.get_augmented_hypergraph(adj_reduced, expansion_matrix)
-        augmented_edge_index = th.stack(adj_augmented.coo()[:2], dim=0)
+        augmented_incidence_index = th.stack(adj_augmented.coo()[:2], dim=0)
         
         # get node embeddings
         if self.spectrum_extractor is not None:
@@ -186,12 +190,12 @@ class Expansion(Method):
             )
         else:
             both_type_node_emb_reduced = th.randn(
-                node_type.size(0), self.emb_features, device=self.device
+                node_type.size(0), self.emb_dim, device=self.device
             )
             
         both_type_node_emb = both_type_node_emb_reduced[all_node_map]
         node_emb = both_type_node_emb[expanded_node_type == 1]
-        edge_node_emb = both_type_node_emb[expanded_node_type == 0]
+        hyperedge_emb = both_type_node_emb[expanded_node_type == 0]
         
         # compute number of nodes in expanded hypergraph
         random_reduction_fraction = (
@@ -218,18 +222,19 @@ class Expansion(Method):
         )
         
         # make predictions
-        node_pred, edge_node_pred, augmented_edge_pred, node_features_pred, hyperedge_features_pred = self.diffusion.sample(
-            edge_index=augmented_edge_index,
+        node_pred, hyperedge_pred, augmented_incidence_pred, node_features_pred, hyperedge_features_pred = self.diffusion.sample(
+            incidence_index=augmented_incidence_index,
             batch=batch,
             node_type=expanded_node_type,
             node_features=expanded_node_features,
             hyperedge_features=expanded_hyperedge_features,
             node_cluster_size=expanded_node_cluster_size,
             expansion_matrix_nodes=expansion_matrix[expanded_node_type == 1, :][:, node_type == 1],
+            expansion_matrix_hyperedges=expansion_matrix[expanded_node_type == 0, :][:, node_type == 0],
             model=model,
             model_kwargs={
                 "node_emb": node_emb,
-                "edge_node_emb": edge_node_emb,
+                "hyperedge_emb": hyperedge_emb,
                 "red_frac": 1 - size / expanded_size,
                 "target_size": target_size.float(),
             },
@@ -237,14 +242,10 @@ class Expansion(Method):
         
         # rescale
         node_cluster_size_pred = (node_pred[:, 1] + 1)/2
-              
-        print(f"expanded_node_cluster_size : {expanded_node_cluster_size}")
-        print(f"node_cluster_size_pred : {node_cluster_size_pred}")
-        print(f"node_features_pred : {node_features_pred}")
         
         node_pred = (node_pred[:, 0] + 1)/2
-        edge_node_pred = edge_node_pred + 1
-        augmented_edge_pred = (augmented_edge_pred + 1)/2
+        hyperedge_pred = hyperedge_pred + 1
+        augmented_incidence_pred = (augmented_incidence_pred + 1)/2
 
         # get node attributes
         if self.deterministic_expansion:
@@ -307,17 +308,17 @@ class Expansion(Method):
             node_attr = (node_pred > 0.5).long() + 1
             node_cluster_size = th.maximum(node_cluster_size_pred.round().long(), th.ones_like(node_cluster_size_pred).long())
             
-        edge_node_attr = (edge_node_pred > 0.66).long() + (edge_node_pred > 1.33).long() + 1
+        hyperedge_attr = (hyperedge_pred > 0.66).long() + (hyperedge_pred > 1.33).long() + 1
         
         # construct new hypergraph
         adj = SparseTensor.from_edge_index(
-            augmented_edge_index[:, augmented_edge_pred > 0.5],
+            augmented_incidence_index[:, augmented_incidence_pred > 0.5],
             sparse_sizes=adj_augmented.sizes(),
-            edge_attr = th.ones(th.sum(augmented_edge_pred > 0.5), device=augmented_edge_pred.device)
+            edge_attr = th.ones(th.sum(augmented_incidence_pred > 0.5), device=augmented_incidence_pred.device)
         )
         
         all_node_attr = th.zeros(batch.size(0), dtype=th.long, device = node_attr.device)
-        all_node_attr[expanded_node_type == 0] = edge_node_attr
+        all_node_attr[expanded_node_type == 0] = hyperedge_attr
         all_node_attr[expanded_node_type == 1] = node_attr
         
         return adj, batch, all_node_attr, expanded_node_type, node_features_pred, hyperedge_features_pred, node_cluster_size
@@ -331,12 +332,12 @@ class Expansion(Method):
 
         # construct labels
         node_attr = (batch.node_expansion.float() - 1) * 2 - 1
-        edge_node_attr = batch.edge_expansion.float() - 2
-        augmented_edge_index, edge_val = to_edge_index(adj_augmented + batch.adj)
-        augmented_edge_attr = (edge_val.float() - 1) * 2 - 1
+        hyperedge_attr = batch.hyperedge_expansion.float() - 2
+        augmented_incidence_index, incidence_val = to_edge_index(adj_augmented + batch.adj)
+        augmented_incidence_attr = (incidence_val.float() - 1) * 2 - 1
         
         node_cluster_size_expanded = (batch.expansion_matrix_nodes @ th.unsqueeze(batch.node_cluster_size_reduced,-1)).squeeze(1).float()
-        
+
         # get node embeddings
         if sign_net is not None:
             both_type_node_emb_reduced = sign_net(
@@ -345,23 +346,35 @@ class Expansion(Method):
             )
         else:
             both_type_node_emb_reduced = th.randn(
-                batch.node_type.size(0), self.emb_features, device=self.device
+                batch.node_type.size(0), self.emb_dim, device=self.device
             )
                 
         both_type_node_emb = batch.expansion_matrix @ both_type_node_emb_reduced
         node_emb = both_type_node_emb[batch.node_type == 1]
-        edge_node_emb = both_type_node_emb[batch.node_type == 0]
+        hyperedge_emb = both_type_node_emb[batch.node_type == 0]
         
         node_features = None
         if hasattr(batch, 'node_features'):
-            if self.features_noise_perturbation > 0:
-                node_features_reduced_noised = batch.node_features_reduced + 0.3*th.randn_like(batch.node_features_reduced) #self.features_noise_perturbation*batch.node_features_diff*
+            if self.node_features_noise_strength > 0:
+                if self.node_features_on_simplex:
+                    node_features_reduced = batch.node_features_reduced
+                    summed = batch.node_features_reduced.sum(dim=-1)
+                    
+                    if (summed > 1e-1).any():
+                        gamma = 10.0 / self.node_features_noise_strength
+                        alpha = batch.node_features_reduced[summed > 1e-1] * gamma + 1
+
+                        dirichlet_dist = th.distributions.Dirichlet(alpha)
+                        
+                        node_features_reduced[summed > 1e-1] = dirichlet_dist.sample()
+                else:
+                    node_features_reduced = batch.node_features_reduced + self.node_features_noise_strength*th.randn_like(batch.node_features_reduced)
             else:
-                node_features_reduced_noised = batch.node_features_reduced
+                node_features_reduced = batch.node_features_reduced
                 
             # Reshape features to 2D for sparse matrix multiplication
-            original_shape = node_features_reduced_noised.size()
-            reshaped_features = node_features_reduced_noised.reshape((original_shape[0], -1))  # (n, d1*d2*...)
+            original_shape = node_features_reduced.size()
+            reshaped_features = node_features_reduced.reshape((original_shape[0], -1))  # (n, d1*d2*...)
             
             node_features = batch.expansion_matrix_nodes @ reshaped_features
             
@@ -370,20 +383,31 @@ class Expansion(Method):
             
         hyperedge_features = None
         if hasattr(batch, 'hyperedge_features'):
-            if self.features_noise_perturbation > 0:
-                hyperedge_features_reduced_noised = batch.hyperedge_features_reduced + self.features_noise_perturbation*batch.hyperedge_features_diff*th.randn_like(batch.hyperedge_features_reduced)
+            if self.hyperedge_features_noise_strength > 0:
+                if self.hyperedge_features_on_simplex:
+                    summed = batch.hyperedge_features_reduced.sum(dim=-1)
+                    hyperedge_features_reduced = batch.hyperedge_features_reduced
+                    
+                    if (summed > 1e-1).any():
+                        gamma = 10.0 / self.hyperedge_features_noise_strength
+                        alpha = batch.hyperedge_features_reduced[summed > 1e-1] * gamma + 1
+                        
+                        dirichlet_dist = th.distributions.Dirichlet(alpha)
+                        
+                        hyperedge_features_reduced[summed > 1e-1] = dirichlet_dist.sample()
+                else:
+                    hyperedge_features_reduced = batch.hyperedge_features_reduced + self.hyperedge_features_noise_strength*th.randn_like(batch.hyperedge_features_reduced)
             else:
-                hyperedge_features_reduced_noised = batch.hyperedge_features_reduced
+                hyperedge_features_reduced = batch.hyperedge_features_reduced
                 
             # Reshape features to 2D for sparse matrix multiplication
-            original_shape = hyperedge_features_reduced_noised.size()
-            reshaped_features = hyperedge_features_reduced_noised.reshape((original_shape[0], -1))  # (n, d1*d2*...)
+            original_shape = hyperedge_features_reduced.size()
+            reshaped_features = hyperedge_features_reduced.reshape((original_shape[0], -1))  # (n, d1*d2*...)
             
             hyperedge_features = batch.expansion_matrix_hyperedges @ reshaped_features
             
             # Reshape back to the original feature dimensions
             hyperedge_features = hyperedge_features.reshape((batch.expansion_matrix_hyperedges.size(0),) + original_shape[1:])  # (k, d1, d2, ...)
-            
             
         # reduction fraction
         size = scatter(batch.node_type, batch.batch)
@@ -391,15 +415,15 @@ class Expansion(Method):
         red_frac = 1 - size / expanded_size
         
         # loss
-        node_loss, edge_node_loss, edge_loss, node_features_loss, hyperedge_features_loss = self.diffusion.get_loss(
-            edge_index=augmented_edge_index,
+        node_loss, hyperedge_loss, incidence_loss, node_features_loss, hyperedge_features_loss = self.diffusion.get_loss(
+            incidence_index=augmented_incidence_index,
             batch=batch.batch,
             node_type=batch.node_type,
             expansion_matrix_nodes=batch.expansion_matrix_nodes,
             expansion_matrix_hyperedges=batch.expansion_matrix_hyperedges,
             node_attr=node_attr,
-            edge_node_attr=edge_node_attr,
-            edge_attr=augmented_edge_attr,
+            hyperedge_attr=hyperedge_attr,
+            incidence_attr=augmented_incidence_attr,
             node_features_expanded=node_features,
             node_features_real=batch.node_features if node_features is not None else None,
             node_cluster_size_expanded=node_cluster_size_expanded,
@@ -409,18 +433,18 @@ class Expansion(Method):
             model=model,
             model_kwargs={
                 "node_emb": node_emb,
-                "edge_node_emb": edge_node_emb,
+                "hyperedge_emb": hyperedge_emb,
                 "red_frac": red_frac,
                 "target_size": batch.target_size.float(),
             },
         )
 
-        loss = node_loss + edge_node_loss + edge_loss
+        loss = node_loss + hyperedge_loss + incidence_loss
         
         res = {
             "node_expansion_loss": node_loss.item(),
-            "edge_node_expansion_loss": edge_node_loss.item(),
-            "augmented_edge_loss": edge_loss.item(),
+            "hyperedge_expansion_loss": hyperedge_loss.item(),
+            "augmented_incidence_loss": incidence_loss.item(),
         }
         
         if hasattr(batch, 'node_features'):
@@ -438,9 +462,9 @@ class Expansion(Method):
         return loss, res
 
     def get_augmented_hypergraph(self, adj_reduced, expansion_matrix):
-        """Returns the expanded bipartite adjacency matrix with additional augmented edges.
+        """Returns the expanded bipartite adjacency matrix with additional augmented incidences.
 
-        All edge weights are set to 1.
+        All incidence weights are set to 1.
         """
         # construct augmented adjacency matrix
         adj_reduced_augmented = adj_reduced.copy()
@@ -460,20 +484,20 @@ class Expansion(Method):
             expansion_matrix @ adj_reduced_augmented @ expansion_matrix.t()
         )
         
-        # drop out edges
+        # drop out incidences
         if self.augmented_radius > 1 and self.augmented_dropout < 1:
             if self.augmented_dropout > 0.0:
                 row, col, val = adj_augmented.coo()
-                edge_mask = th.rand_like(val) >= self.augmented_dropout
-                edge_mask = edge_mask | (val > 1)  # keep required edges
+                incidence_mask = th.rand_like(val) >= self.augmented_dropout
+                incidence_mask = incidence_mask | (val > 1)  # keep required incidences
                 
                 # make undirected
-                edge_mask = edge_mask & (row < col)
-                edge_index = th.stack([row[edge_mask], col[edge_mask]], dim=0)
-                edge_index = th.cat([edge_index, edge_index.flip(0)], dim=1)
+                incidence_mask = incidence_mask & (row < col)
+                incidence_index = th.stack([row[incidence_mask], col[incidence_mask]], dim=0)
+                incidence_index = th.cat([incidence_index, incidence_index.flip(0)], dim=1)
                 adj_augmented = SparseTensor.from_edge_index(
-                    edge_index,
-                    edge_attr=th.ones(edge_index.shape[1], device=self.device),
+                    incidence_index,
+                    edge_attr=th.ones(incidence_index.shape[1], device=self.device),
                     sparse_sizes=adj_augmented.sizes(),
                 )
             else:

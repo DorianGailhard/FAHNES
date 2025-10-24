@@ -1,0 +1,27 @@
+# @package _global_
+defaults:
+  - override /dataset: file
+  - override /diffusion: cfm
+  - _self_
+
+name: manifoldNetBench
+
+dataset:
+  name: manifoldNetBench
+  visualization: mesh
+  node_features_dim: 3
+  node_features_noise_strength: 0.1
+  node_features_on_simplex: False
+  hyperedge_features_dim: 0
+ 
+reduction:
+  topological_cost_importance: 0
+
+training:
+  batch_size: 32
+
+validation:
+  batch_size: 32
+
+spectral:
+  num_eigenvectors: 0

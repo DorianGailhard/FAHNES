@@ -31,57 +31,31 @@ class RandRedDataset(IterableDataset, ABC):
             node_type_reduced = np.zeros(red_next.bipartite_adj.shape[0])
             node_type_reduced[:red_next.n] = 1
             
-            diff_node_features = None
-            diff_hyperedge_features = None
-            if reduced_hypergraph.node_features is not None or reduced_hypergraph.hyperedge_features is not None:
-                if reduced_hypergraph.node_features is not None:
-                    # Reshape features to 2D for sparse matrix multiplication
-                    original_shape = reduced_hypergraph.node_features.shape
-                    reshaped_features = reduced_hypergraph.node_features.reshape((original_shape[0], -1))  # (n, d1*d2*...)
-                    
-                    node_features_reduced = reduced_hypergraph.expansion_matrix_nodes @ reshaped_features
-                    
-                    # Reshape back to the original feature dimensions
-                    node_features_reduced = node_features_reduced.reshape((reduced_hypergraph.expansion_matrix_nodes.shape[0],) + original_shape[1:])  # (k, d1, d2, ...)
-                    
-                    diff_node_features = np.abs(node_features_reduced - red_next.node_features)
-                
-                if reduced_hypergraph.hyperedge_features is not None:
-                    # Reshape features to 2D for sparse matrix multiplication
-                    original_shape = reduced_hypergraph.hyperedge_features.shape
-                    reshaped_features = reduced_hypergraph.hyperedge_features.reshape((original_shape[0], -1))  # (n, d1*d2*...)
-                    
-                    hyperedge_features_reduced = reduced_hypergraph.expansion_matrix_hyperedges @ reshaped_features
-                    
-                    # Reshape back to the original feature dimensions
-                    hyperedge_features_reduced = hyperedge_features_reduced.reshape((reduced_hypergraph.expansion_matrix_hyperedges.shape[0],) + original_shape[1:])  # (k, d1, d2, ...)
-                    
-                    diff_hyperedge_features = np.abs(hyperedge_features_reduced - red_next.hyperedge_features)
-
             data.append(
                 ReducedGraphData(
                     target_size=reduction_level_zero.n,
                     reduction_level=red.level,
+                    
                     adj=red.bipartite_adj.astype(bool).astype(np.float32),
                     node_type=node_type,
                     node_features=red.node_features,
                     node_cluster_size=red.node_cluster_size,
                     hyperedge_features=red.hyperedge_features,
                     node_expansion=red.node_expansion,
-                    edge_expansion=red.edge_expansion,
+                    hyperedge_expansion=red.hyperedge_expansion,
+                    
                     adj_reduced=red_next.bipartite_adj.astype(bool).astype(np.float32),
                     node_type_reduced=node_type_reduced,
                     node_features_reduced=red_next.node_features,
-                    node_features_diff=diff_node_features,
                     node_cluster_size_reduced=red_next.node_cluster_size,
                     hyperedge_features_reduced=red_next.hyperedge_features,
-                    hyperedge_features_diff=diff_hyperedge_features,
-                    expansion_matrix=red_next.expansion_matrix,
-                    expansion_matrix_nodes=red_next.expansion_matrix_nodes,
-                    expansion_matrix_hyperedges=red_next.expansion_matrix_hyperedges,
                     spectral_features_reduced=self.spectrum_extractor(red_next.bipartite_adj)
                     if self.spectrum_extractor is not None
                     else None,
+                    
+                    expansion_matrix=red_next.expansion_matrix,
+                    expansion_matrix_nodes=red_next.expansion_matrix_nodes,
+                    expansion_matrix_hyperedges=red_next.expansion_matrix_hyperedges,
                 )
             )
             
@@ -129,32 +103,36 @@ class FiniteRandRedDataset(RandRedDataset):
 
 class InfiniteRandRedDataset(RandRedDataset):
     def __iter__(self):
-        reds = [self.red_factory(hypergraph) for hypergraph in self.hypergraphs]
-        
-        # get process id
+        # Get worker info
         worker_info = th.utils.data.get_worker_info()
-        worker_id = worker_info.id if worker_info is not None else 0
+        if worker_info is not None:
+            worker_id = worker_info.id
+            num_workers = worker_info.num_workers
+
+            # Split hypergraphs across workers
+            worker_hypergraphs = self.hypergraphs[worker_id::num_workers]
+        else:
+            # Single-process (non-multiprocessing) case
+            worker_id = 0
+            worker_hypergraphs = self.hypergraphs
+
         rng = np.random.default_rng(worker_id)
 
-        # initialize graph_reduced_data
-        hypergraphs_reduced_data = {
-            i: self.get_random_reduction_sequence(hypergraph, rng)
-            for i, hypergraph in enumerate(reds)
-        }
+        # Only create reductions for the worker's portion of the data
+        reds = [self.red_factory(hg) for hg in worker_hypergraphs]
 
-        # yield random reduced graph data
+        # Initialize local cache of reductions
+        hypergraphs_reduced_data = {i: [] for i in range(len(worker_hypergraphs))}
+
+        # Yield random reduced graph data indefinitely
         while True:
-            i = rng.integers(len(self.hypergraphs))
+            i = rng.integers(len(worker_hypergraphs))
             if len(hypergraphs_reduced_data[i]) == 0:
                 hypergraphs_reduced_data[i] = self.get_random_reduction_sequence(
                     reds[i], rng
                 )
                 rng.shuffle(hypergraphs_reduced_data[i])
             yield hypergraphs_reduced_data[i].pop()
-
-    @property
-    def max_node_expansion(self):
-        raise NotImplementedError
 
 
 class ReducedGraphData(Data):

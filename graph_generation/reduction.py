@@ -24,13 +24,16 @@ class Reduction(ABC):
     red_threshold: int
     rand_lambda: int
 
-    def __init__(self, bipartite_adj, clique_adj, node_features, hyperedge_features, node_cluster_size=None, edge_cluster_size=None, lap=None, B=None, expansion_matrix=None, expansion_matrix_nodes=None, expansion_matrix_hyperedges=None, level=0):
+    def __init__(self, bipartite_adj, clique_adj, node_features, hyperedge_features, node_cluster_size=None, hyperedge_cluster_size=None, lap=None, B=None, expansion_matrix=None, expansion_matrix_nodes=None, expansion_matrix_hyperedges=None, level=0):
         self.bipartite_adj = bipartite_adj
         self.clique_adj = clique_adj
         self.n = clique_adj.shape[0]
         
         if node_features is not None:
-            self.node_features = node_features.astype(np.float64)
+            if self.n == 1:
+                self.node_features = np.zeros_like(node_features.astype(np.float64))
+            else:
+                self.node_features = node_features.astype(np.float64)
         else:
             self.node_features = None
         
@@ -40,14 +43,17 @@ class Reduction(ABC):
             self.node_cluster_size = np.ones(self.n)
         
         if hyperedge_features is not None:
-            self.hyperedge_features = hyperedge_features.astype(np.float64)
+            if self.n == 1:
+                self.hyperedge_features = np.zeros_like(hyperedge_features.astype(np.float64))
+            else:
+                self.hyperedge_features = hyperedge_features.astype(np.float64)
         else:
             self.hyperedge_features = None
         
-        if edge_cluster_size is not None:
-            self.edge_cluster_size = edge_cluster_size
+        if hyperedge_cluster_size is not None:
+            self.hyperedge_cluster_size = hyperedge_cluster_size
         else:
-            self.edge_cluster_size = np.ones(bipartite_adj.shape[0] - self.n)
+            self.hyperedge_cluster_size = np.ones(bipartite_adj.shape[0] - self.n)
         
         self.node_degree = self.clique_adj.sum(0)
         self.lap = sp.sparse.diags(self.node_degree) - self.clique_adj if lap is None else lap
@@ -66,7 +72,7 @@ class Reduction(ABC):
             if expansion_matrix is None
             else expansion_matrix.sum(0)[:self.n].astype(np.int32)
         )
-        self.edge_expansion = (
+        self.hyperedge_expansion = (
             np.ones(self.bipartite_adj.shape[0] - self.n, dtype=np.int32)
             if expansion_matrix is None
             else expansion_matrix.sum(0)[self.n:].astype(np.int32)
@@ -75,7 +81,7 @@ class Reduction(ABC):
         
     def get_reduced_hypergraph(self, rng=np.random.default_rng()):
         # Compute the coarsened clique representation
-        C, collapsed_coarsened_incidence, edge_expansion_matrix = self.get_coarsening_matrix(rng)
+        C, collapsed_coarsened_incidence, hyperedge_expansion_matrix = self.get_coarsening_matrix(rng)
         
         # P_inv = C.T with all non-zero entries set to 1
         P_inv = C.T.astype(bool).astype(C.dtype)
@@ -105,8 +111,8 @@ class Reduction(ABC):
         bottom = hstack([collapsed_coarsened_incidence.T, zero_hyperedges])
         bipartite_adjacency = csc_array(vstack([top, bottom]))
         
-        # Add the edge_expansion_matrix to the expansion matrix
-        expansion_matrix = bmat([[P_inv, None], [None, edge_expansion_matrix]], format='coo')
+        # P_inv is for the nodes, hyperedge_lifting_matrix for the hyperedges
+        expansion_matrix = bmat([[P_inv, None], [None, hyperedge_expansion_matrix]], format='coo')
         
         # Compute coarsened features and new cluster sizes
         node_cluster_size = np.atleast_1d(P_inv.T @ self.node_cluster_size)  # (k,)
@@ -129,7 +135,7 @@ class Reduction(ABC):
             # Reshape back to the original feature dimensions
             summed_weighted_features = summed_weighted_features.reshape((P_inv.shape[1],) + original_shape[1:])  # (k, d1, d2, ...)
             
-        edge_cluster_size = np.atleast_1d(edge_expansion_matrix.T @ self.edge_cluster_size)  # (k,)
+        hyperedge_cluster_size = np.atleast_1d(hyperedge_expansion_matrix.T @ self.hyperedge_cluster_size)  # (k,)
         hyperedge_features = None
         if self.hyperedge_features is not None:
             # Reshape weighted features to 2D for sparse matrix multiplication
@@ -137,16 +143,16 @@ class Reduction(ABC):
             reshaped_features = self.hyperedge_features.reshape((original_shape[0], -1))  # (n, d1*d2*...)
             
             # Weight the features by the current node_cluster_size
-            weighted_features = reshaped_features * self.edge_cluster_size[:, None]
+            weighted_features = reshaped_features * self.hyperedge_cluster_size[:, None]
     
             # Sum features of the nodes inside each cluster
-            summed_weighted_features = edge_expansion_matrix.T @ weighted_features  # (k, d1*d2*...)
+            summed_weighted_features = hyperedge_expansion_matrix.T @ weighted_features  # (k, d1*d2*...)
             
             # Compute weighted average features
-            hyperedge_features = summed_weighted_features / edge_cluster_size[:, None]
+            hyperedge_features = summed_weighted_features / hyperedge_cluster_size[:, None]
     
             # Reshape back to the original feature dimensions
-            summed_weighted_features = summed_weighted_features.reshape((edge_expansion_matrix.shape[1],) + original_shape[1:])  # (k, d1, d2, ...)
+            summed_weighted_features = summed_weighted_features.reshape((hyperedge_expansion_matrix.shape[1],) + original_shape[1:])  # (k, d1, d2, ...)
             
         return self.__class__(
             bipartite_adj=bipartite_adjacency,
@@ -154,12 +160,12 @@ class Reduction(ABC):
             node_features=node_features,
             hyperedge_features=hyperedge_features,
             node_cluster_size=node_cluster_size,
-            edge_cluster_size=edge_cluster_size,
+            hyperedge_cluster_size=hyperedge_cluster_size,
             lap=lap_reduced,
             B=C @ self.B,
             expansion_matrix=expansion_matrix,
             expansion_matrix_nodes=P_inv,
-            expansion_matrix_hyperedges=edge_expansion_matrix,
+            expansion_matrix_hyperedges=hyperedge_expansion_matrix,
             level=self.level + 1,
         )
 
@@ -188,7 +194,7 @@ class Reduction(ABC):
         d_inv_sqrt[mask] = 0
         return self.B @ np.diag(d_inv_sqrt) @ V
     
-    def collapse_duplicate_edges(self, coarsened_incidence: csc_array, edge_expansion_matrix: csc_array):
+    def collapse_duplicate_edges(self, coarsened_incidence: csc_array, hyperedge_expansion_matrix: csc_array):
         unique_columns = {}
         column_map = {}
         next_col_index = 0
@@ -201,14 +207,14 @@ class Reduction(ABC):
             col = tuple(coarsened_incidence.indices[start:end])
     
             if col in unique_columns:
-                start_lifting, end_lifting = edge_expansion_matrix.indptr[col_index], edge_expansion_matrix.indptr[col_index+1]
-                mergings[unique_columns[col]].extend(edge_expansion_matrix.indices[start_lifting:end_lifting])
+                start_lifting, end_lifting = hyperedge_expansion_matrix.indptr[col_index], hyperedge_expansion_matrix.indptr[col_index+1]
+                mergings[unique_columns[col]].extend(hyperedge_expansion_matrix.indices[start_lifting:end_lifting])
             else:
                 unique_columns[col] = next_col_index
                 column_map[col_index] = next_col_index
                 
-                start_lifting, end_lifting = edge_expansion_matrix.indptr[col_index], edge_expansion_matrix.indptr[col_index+1]
-                mergings[next_col_index] = list(edge_expansion_matrix.indices[start_lifting:end_lifting])
+                start_lifting, end_lifting = hyperedge_expansion_matrix.indptr[col_index], hyperedge_expansion_matrix.indptr[col_index+1]
+                mergings[next_col_index] = list(hyperedge_expansion_matrix.indices[start_lifting:end_lifting])
                 next_col_index += 1
     
         # Construct the collapsed incidence matrix
@@ -227,7 +233,7 @@ class Reduction(ABC):
         
         # Create the collapsed matrices
         collapsed_incidence_matrix = csc_array((np.ones(incidence_collapsed_indptr[-1], dtype=int), incidence_collapsed_rows, incidence_collapsed_indptr), shape=(coarsened_incidence.shape[0], next_col_index))
-        collapsed_lifting_matrix = csc_array((np.ones(lifting_collapsed_indptr[-1], dtype=int), lifting_collapsed_rows, lifting_collapsed_indptr), shape=(edge_expansion_matrix.shape[0], next_col_index))
+        collapsed_lifting_matrix = csc_array((np.ones(lifting_collapsed_indptr[-1], dtype=int), lifting_collapsed_rows, lifting_collapsed_indptr), shape=(hyperedge_expansion_matrix.shape[0], next_col_index))
     
         return collapsed_incidence_matrix, collapsed_lifting_matrix
     
@@ -277,7 +283,7 @@ class Reduction(ABC):
         marked = np.zeros(self.n, dtype=bool)
         
         incidence_matrix = csc_array(self.bipartite_adj [:self.n, self.n:])
-        edge_expansion_matrix = eye(incidence_matrix.shape[1], format='csc')
+        hyperedge_expansion_matrix = eye(incidence_matrix.shape[1], format='csc')
         
         # As we dynamically reduce the incidence matrix, the indices in the
         # contraction_set do not correspond to those of the matrix
@@ -309,11 +315,11 @@ class Reduction(ABC):
                 coarsened_incidence = csc_array((np.ones(new_indptr[-1], dtype=int), new_indices, new_indptr), shape=(incidence_matrix.shape[0] - len(index_map_contraction_set)+1, incidence_matrix.shape[1]))
                 
                 # Then merge the hyperedges  
-                collapsed_coarsened_incidence, new_edge_expansion_matrix = self.collapse_duplicate_edges(coarsened_incidence, edge_expansion_matrix)
+                collapsed_coarsened_incidence, new_hyperedge_expansion_matrix = self.collapse_duplicate_edges(coarsened_incidence, hyperedge_expansion_matrix)
 
-                if new_edge_expansion_matrix.sum(0).max() <= 3:
+                if new_hyperedge_expansion_matrix.sum(0).max() <= 3:
                     incidence_matrix = collapsed_coarsened_incidence
-                    edge_expansion_matrix = new_edge_expansion_matrix
+                    hyperedge_expansion_matrix = new_hyperedge_expansion_matrix
                     partitions.append(contraction_set)
                     marked[contraction_set] = True
                     
@@ -333,7 +339,7 @@ class Reduction(ABC):
             P[partition[0], partition] = 1 / size
             mask[partition[1:]] = False
         P = P[mask, :]
-        return coo_array(P, dtype=np.float64), incidence_matrix, coo_array(edge_expansion_matrix, dtype=np.float64)
+        return coo_array(P, dtype=np.float64), incidence_matrix, coo_array(hyperedge_expansion_matrix, dtype=np.float64)
 
 
     @abstractmethod
@@ -411,18 +417,26 @@ class EdgeReduction(Reduction):
 
 class ReductionFactory:
     def getIncidenceMatrix(self, H) -> csr_array:
-        rows = []
-        col = []
-        
-        dic_nodes = {node : i for node, i in zip(H.nodes, range(len(list(H.nodes))))}
-        dic_edges = {edge : i for edge, i in zip(H.edges, range(len(list(H.edges))))}
-        
-        for edge in H.edges:
+        node_list = list(H.nodes)
+        edge_list = list(H.edges)
+    
+        dic_nodes = {node: i for i, node in enumerate(node_list)}
+        dic_edges = {edge: i for i, edge in enumerate(edge_list)}
+    
+        num_entries = sum(len(H.edges[edge]) for edge in edge_list)
+        rows = np.empty(num_entries, dtype=int)
+        cols = np.empty(num_entries, dtype=int)
+    
+        idx = 0
+        for edge in edge_list:
             for node in H.edges[edge]:
-                rows.append(dic_nodes[node])
-                col.append(dic_edges[edge])
+                rows[idx] = dic_nodes[node]
+                cols[idx] = dic_edges[edge]
+                idx += 1
+    
+        data = np.ones(num_entries, dtype=int)
+        coo_mat = coo_array((data, (rows, cols)), shape=(len(node_list), len(edge_list)))
         
-        coo_mat = coo_array((np.ones(len(rows)), (rows, col)), (len(list(H.nodes)), len(list(H.edges))))
         return csr_array(coo_mat)
         
     def getBipartiteAdj(self, incidence_matrix) -> csr_array:
@@ -473,6 +487,8 @@ class ReductionFactory:
         max_red_frac,
         red_threshold,
         rand_lambda,
+        extract_node_features=False,
+        extract_hyperedge_features=False
     ):
         self.contraction_family = contraction_family
         self.cost_type = cost_type
@@ -484,6 +500,8 @@ class ReductionFactory:
         self.max_red_frac = max_red_frac
         self.red_threshold = red_threshold
         self.rand_lambda = rand_lambda
+        self.extract_node_features = extract_node_features
+        self.extract_hyperedge_features = extract_hyperedge_features
 
     def __call__(self, H: hnx.Hypergraph) -> Reduction:
         if self.contraction_family == "neighborhoods":
@@ -501,16 +519,6 @@ class ReductionFactory:
             raise ValueError("Unknown reduction cost type.")
             
         reduction.topological_cost_importance = self.topological_cost_importance
-            
-        node_features = None
-        hyperedge_features= None
-        
-        if H.nodes[next(iter(H.nodes))].feature is not None:
-            node_features = np.array([H.nodes[i].feature for i in H.nodes])
-        
-        if H.edges[next(iter(H.edges))].feature is not None:
-            hyperedge_features = np.array([H.edges[i].feature for i in H.edges])
-
         reduction.preserved_eig_size = self.preserved_eig_size
         reduction.sqrt_partition_size = self.sqrt_partition_size
         reduction.weighted_reduction = self.weighted_reduction
@@ -519,6 +527,33 @@ class ReductionFactory:
         reduction.red_threshold = self.red_threshold
         reduction.rand_lambda = self.rand_lambda
         
-        incidence_matrix = self.getIncidenceMatrix(H)
-
-        return reduction(self.getBipartiteAdj(incidence_matrix), self.getCliqueAdj(incidence_matrix), node_features, hyperedge_features)
+        
+        if isinstance(H, hnx.Hypergraph):
+            incidence_matrix = self.getIncidenceMatrix(H)
+            bipartite_adj = self.getBipartiteAdj(incidence_matrix)
+            clique_adj = self.getCliqueAdj(incidence_matrix)
+            
+            node_features = None
+            if self.extract_node_features:
+                num_nodes = incidence_matrix.shape[0]
+                feat_dim = len(H.nodes[next(iter(H.nodes))].feature)
+                node_features = np.empty((num_nodes, feat_dim), dtype=np.float32)
+        
+                for i, node in enumerate(H.nodes):
+                    node_features[i] = H.nodes[node].feature
+            
+            hyperedge_features = None
+            if self.extract_hyperedge_features:
+                num_hyperedge = incidence_matrix.shape[1]
+                feat_dim = len(H.edges[next(iter(H.edges))].feature)
+                hyperedge_features = np.empty((num_hyperedge, feat_dim), dtype=np.float32)
+        
+                for i, edge in enumerate(H.edges):
+                    hyperedge_features[i] = H.edges[edge].feature
+        else:
+            bipartite_adj = H[0]
+            clique_adj = H[1]
+            node_features = H[2]
+            hyperedge_features = H[3]
+            
+        return reduction(bipartite_adj, clique_adj, node_features, hyperedge_features)

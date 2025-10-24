@@ -1,9 +1,9 @@
 name: hypergraph-generation-features
 channels:
-  - pytorch
-  - pyg
-  - nvidia
   - conda-forge
+  - nvidia
+  - pyg
+  - pytorch
   - defaults
 dependencies:
   - _libgcc_mutex=0.1=conda_forge
@@ -21,11 +21,12 @@ dependencies:
   - brotli-bin=1.1.0=hd590300_1
   - brotli-python=1.1.0=py310hc6cd4ac_1
   - bzip2=1.0.8=hd590300_5
-  - ca-certificates=2024.2.2=hbcca054_0
+  - ca-certificates=2025.8.3=hbd8a1cb_0
   - cairo=1.18.0=h3faef2a_0
   - cairomm-1.16=1.16.2=h7e731d7_1
-  - certifi=2024.2.2=pyhd8ed1ab_0
+  - certifi=2025.8.3=pyhd8ed1ab_0
   - cffi=1.16.0=py310h2fee648_0
+  - chardet=5.2.0=pyhd8ed1ab_3
   - charset-normalizer=3.3.2=pyhd8ed1ab_0
   - click=8.1.7=unix_pyh707e725_0
   - cloudpickle=3.0.0=pyhd8ed1ab_0
@@ -42,6 +43,7 @@ dependencies:
   - docker-pycreds=0.4.0=py_0
   - epoxy=1.5.10=h166bdaf_1
   - expat=2.6.2=h59595ed_0
+  - fcd=1.2.2=pyh29332c3_0
   - filelock=3.14.0=pyhd8ed1ab_0
   - font-ttf-dejavu-sans-mono=2.37=hab24e00_0
   - font-ttf-inconsolata=3.000=h77eed37_0
@@ -52,6 +54,7 @@ dependencies:
   - fonts-conda-forge=1=0
   - fonttools=4.51.0=py310h2372a71_0
   - freetype=2.12.1=h267a509_2
+  - freetype-py=2.3.0=pyhd8ed1ab_0
   - fribidi=1.0.10=h36c2ea0_0
   - gdk-pixbuf=2.42.12=hb9ae30d_0
   - gettext=0.22.5=h59595ed_2
@@ -65,6 +68,7 @@ dependencies:
   - graph-tool=2.65=py310haee70ea_0
   - graph-tool-base=2.65=py310h66d7a0e_0
   - graphite2=1.3.13=h59595ed_1003
+  - greenlet=3.0.3=py310hc6cd4ac_0
   - gst-plugins-base=1.24.3=h9ad1361_0
   - gstreamer=1.24.3=haf2f30d_0
   - gtk3=3.24.42=h6d40eaa_0
@@ -134,6 +138,7 @@ dependencies:
   - libpng=1.6.43=h2797004_0
   - libpq=16.3=ha72fbe1_0
   - libprotobuf=4.25.3=h08a7969_0
+  - librdkit=2024.03.5=h79cfef2_3
   - librsvg=2.58.0=hadf69e7_1
   - libsndfile=1.2.2=hc60ed4a_1
   - libsqlite=3.45.3=h2797004_0
@@ -170,7 +175,7 @@ dependencies:
   - numpy=1.26.4=py310hb13e2d6_0
   - omegaconf=2.3.0=pyhd8ed1ab_0
   - openjpeg=2.5.2=h488ebb8_0
-  - openssl=3.3.0=h4ab18f5_2
+  - openssl=3.3.1=hb9d3cd8_3
   - packaging=24.0=pyhd8ed1ab_0
   - pango=1.52.2=ha41ecd1_0
   - pathtools=0.1.2=py_1
@@ -196,6 +201,7 @@ dependencies:
   - python=3.10.14=hd12c33a_0_cpython
   - python-dateutil=2.9.0=pyhd8ed1ab_0
   - python-dotenv=1.0.1=pyhd8ed1ab_0
+  - python-tzdata=2025.2=pyhd8ed1ab_0
   - python_abi=3.10=4_cp310
   - pytorch=2.0.1=py3.10_cuda11.8_cudnn8.7.0_0
   - pytorch-cuda=11.8=h7e8668a_5
@@ -204,8 +210,11 @@ dependencies:
   - pytorch-sparse=0.6.17=py310_torch_2.0.0_cu118
   - pyyaml=6.0.1=py310h2372a71_1
   - qt-main=5.15.8=hc9dc06e_21
+  - rdkit=2024.03.5=py310h57e35d3_3
   - readline=8.2=h8228510_1
+  - reportlab=4.2.2=py310hc51659f_0
   - requests=2.32.2=pyhd8ed1ab_0
+  - rlpycairo=0.2.0=pyhd8ed1ab_0
   - scikit-learn=1.5.0=py310h981052a_0
   - scipy=1.13.0=py310h93e2701_1
   - sentry-sdk=2.2.1=pyhd8ed1ab_0
@@ -216,6 +225,7 @@ dependencies:
   - six=1.16.0=pyh6c4a22f_0
   - smmap=5.0.0=pyhd8ed1ab_0
   - sparsehash=2.0.4=hcb278e6_1
+  - sqlalchemy=2.0.32=py310h5b4e0ec_0
   - submitit=1.5.1=pyhd8ed1ab_0
   - sympy=1.12=pypyh9d50eac_103
   - tbb=2021.12.0=h297d8ca_1
@@ -226,6 +236,7 @@ dependencies:
   - torchtriton=2.0.0=py310
   - tornado=6.4=py310h2372a71_0
   - tqdm=4.66.4=pyhd8ed1ab_0
+  - typing-extensions=4.11.0=hd8ed1ab_0
   - typing_extensions=4.11.0=pyha770c72_0
   - tzdata=2024a=h0c530f3_0
   - unicodedata2=15.1.0=py310h2372a71_0
@@ -273,8 +284,11 @@ dependencies:
   - zstandard=0.19.0=py310h5764c6d_0
   - zstd=1.5.6=ha6fb4c9_0
   - pip:
+      - celluloid==0.2.0
+      - decorator==5.2.1
+      - hypernetx==2.3.5
+      - igraph==0.11.9
+      - pandas==2.3.2
       - platformdirs==4.2.2
       - pytz==2024.1
-      - hypernetx==2.3.5
-      - POT
-      - -e .
+      - texttable==1.7.0
