@@ -1,0 +1,20 @@
+# @package _global_
+defaults:
+  - override /dataset: file
+  - _self_
+
+name: point_cloud
+
+dataset:
+  name: point_cloud
+  visualization: graph
+  node_features_dim: 0
+
+training:
+  batch_size: 8
+
+validation:
+  batch_size: 16
+
+spectral:
+  num_features: 2

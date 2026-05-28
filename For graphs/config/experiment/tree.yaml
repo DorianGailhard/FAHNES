@@ -1,0 +1,20 @@
+# @package _global_
+defaults:
+  - override /dataset: file
+  - _self_
+
+name: tree
+
+dataset:
+  name: tree
+  visualization: graph
+  node_features_dim: 0
+
+training:
+  batch_size: 32
+
+validation:
+  batch_size: 40
+
+spectral:
+  num_features: 2

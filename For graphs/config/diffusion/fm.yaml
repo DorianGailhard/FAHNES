@@ -1,0 +1,4 @@
+name: "fm"
+num_steps: 256
+self_conditioning: True
+use_lognorm_t: False

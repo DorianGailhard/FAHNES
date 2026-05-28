@@ -1,0 +1,29 @@
+# @package _global_
+defaults:
+  - override /dataset: file
+  - _self_
+
+name: QM9_fg
+
+dataset:
+  name: QM9_fg
+  visualization: molecule_implicit_H
+  node_features_dim: 4
+  node_features_noise_strength: 0.3
+  node_features_on_simplex: False
+  hyperedge_features_dim: 5
+  hyperedge_features_noise_strength: 0.3
+  hyperedge_features_on_simplex: False
+ 
+reduction:
+  topological_cost_importance: 1
+  preserved_eig_size: 1
+
+training:
+  batch_size: 100
+  
+validation:
+  batch_size: 150
+
+spectral:
+  num_eigenvectors: 2

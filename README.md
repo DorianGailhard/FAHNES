@@ -1,47 +1,11 @@
 # FAHNES: Feature-aware Hypergraph Generation via Next-Scale Prediction
 
-This repository contains the reference implementation of the paper [FAHNES: Feature-aware Hypergraph Generation via Next-Scale Prediction]([https://arxiv.org/abs/2408.16457](https://arxiv.org/abs/2506.01467)). Our work is based on [Efficient and Scalable Graph Generation through Iterative Local Expansion](https://openreview.net/forum?id=2XkTz7gdpc), many thanks for their great code!
+This repository contains the reference implementation of the paper [FAHNES: Feature-aware Hypergraph Generation via Next-Scale Prediction]([https://arxiv.org/abs/2408.16457](https://arxiv.org/abs/2506.01467)).
 
+## Content
+We provide two versions of the code: one for graphs, and one for hypergraphs. Please navigate to the corresponding folder and refer to the instructions therein.
 
-## Setup
-
-To get started, follow these steps:
-
-+ Clone this repository
-
-+ Create the specified [conda](https://docs.conda.io/en/latest/) environment named `hypergraph-generation-features` by running the following command:
-
-    ```bash
-    conda env create -f environment.yaml
-    ```
-
-    Note that the `graph-tool` library is not available on Windows. This library is used for SBM hypergraph evaluation, which will consequently not work on Windows. Everything else should work regardless of the operating system.
-
-
-## Usage
-
-The main entry point is `main.py` with parameters managed by the [Hydra](https://hydra.cc/) framework.
-To reproduce the results from the paper, run:
-
-```bash
-python main.py +experiment=XXX
-```
-
-where `XXX` is one of the following experiments:
-`hypergraphSBM`, `hypergraphEgo`, `hypergraphTree`, `meshBookshelf`, `meshPiano`, `QM9`, `manifoldNetAirplane`, `manifoldNetBench`
-
-New experiments can be added by adding a pickle file in `data/` and creating a new config file in `config/experiment/` or passing the parameters directly through the command line. Please refer to the [Hydra documentation](https://hydra.cc/docs/intro/) for more information.
-
-
-### Checkpoints
-
-When `training.save_checkpoint` in the configuration is set to `True`, checkpoints are saved. To resume training from a checkpoint, set `training.resume` to the step number of the checkpoint, or to `True` to resume from the latest checkpoint.
-
-
-### Wandb
-
-To log the results to [Wandb](https://wandb.ai/), set `wandb.logging` to `True` in the configuration.
-
+Additionally, we provide two Jupyter notebooks: `baselines.ipynb`, containing the basic baselines we used for featured graph and hypergraph generation, and `visualizations.ipynb`, containing the code to generate visualizations for the samples and for coarsening sequences.
 
 ## Citation
 When using this code, please cite our paper:
