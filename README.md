@@ -1,6 +1,6 @@
-# FAHNES: Feature-aware Hypergraph Generation via Next-Scale Prediction
+# FAHNES: Feature-aware (Hyper)graph Generation via Next-Scale Prediction
 
-This repository contains the reference implementation of the paper [FAHNES: Feature-aware Hypergraph Generation via Next-Scale Prediction]([https://arxiv.org/abs/2408.16457](https://arxiv.org/abs/2506.01467)).
+This repository contains the reference implementation of the paper [FAHNES: Feature-aware (Hyper)graph Generation via Next-Scale Prediction](https://arxiv.org/abs/2506.01467).
 
 ## Content
 We provide two versions of the code: one for graphs, and one for hypergraphs. Please navigate to the corresponding folder and refer to the instructions therein.
@@ -11,7 +11,7 @@ Additionally, we provide two Jupyter notebooks: `baselines.ipynb`, containing th
 When using this code, please cite our paper:
 ```
 @misc{gailhard2025featureawarehypergraphgenerationnextscale,
-	title={Feature-aware Hypergraph Generation via Next-Scale Prediction}, 
+	title={Feature-aware (Hyper)graph Generation via Next-Scale Prediction}, 
 	author={Dorian Gailhard and Enzo Tartaglione and Lirida Naviner and Jhony H. Giraldo},
 	year={2025},
 	eprint={2506.01467},
